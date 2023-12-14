@@ -82,11 +82,9 @@ impl<B: Backend> Batcher<TextImgItem, TextImgBatch<B>> for TextImgBatcher<B> {
 /// MNIST item.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct TextImgItem {
-    /// Image as a 2D array of floats.
     pub image_raw: Vec<u8>,
     pub image_height: usize,
     pub image_width: usize,
-    /// Label of the image.
     pub target: Vec<i32>,
     pub target_len: i32,
 }
