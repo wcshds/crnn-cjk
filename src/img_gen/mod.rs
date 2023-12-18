@@ -1,8 +1,9 @@
-mod font_util;
 mod corpus;
-mod init;
+pub(super) mod cv_helper;
+pub mod cv_util;
+mod font_util;
 pub mod generator;
-
+mod init;
 
 #[cfg(test)]
 mod test {
