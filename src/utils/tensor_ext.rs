@@ -23,7 +23,7 @@ where
         assign_range.push(left_pad..(left_pad + origin_len));
     }
 
-    let padded = Tensor::<B, D, K>::full_device(pad_shape, fill_value, &device);
+    let padded = Tensor::<B, D, K>::full(pad_shape, fill_value, &device);
 
     padded.slice_assign::<D>(assign_range.try_into().unwrap(), tensor)
 }

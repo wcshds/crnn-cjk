@@ -42,7 +42,7 @@ impl<B: Backend> Batcher<TextImgItem, TextImgBatch<B>> for TextImgBatcher<B> {
             .iter()
             .map(|item| {
                 let data = Data::<u8, 1>::from(item.image_raw.as_slice());
-                let tensor = Tensor::<B, 1, Int>::from_data(data.convert()).float();
+                let tensor = Tensor::<B, 1, Int>::from_data(data.convert(), &self.device).float();
                 let tensor = tensor.reshape([1, 1, item.image_height, item.image_width]);
                 let pad_left = (1000 - item.image_width) / 2;
                 let pad_right = 1000 - item.image_width - pad_left;
@@ -57,7 +57,7 @@ impl<B: Backend> Batcher<TextImgItem, TextImgBatch<B>> for TextImgBatcher<B> {
             .iter()
             .map(|item| {
                 let data = Data::<i32, 1>::from(item.target.as_slice());
-                let tensor = Tensor::<B, 1, Int>::from_data(data.convert());
+                let tensor = Tensor::<B, 1, Int>::from_data(data.convert(), &self.device);
                 tensor
             })
             .collect();
@@ -66,7 +66,7 @@ impl<B: Backend> Batcher<TextImgItem, TextImgBatch<B>> for TextImgBatcher<B> {
 
         let images = Tensor::cat(images, 0).to_device(&self.device);
         let targets = Tensor::cat(targets, 0).to_device(&self.device);
-        let target_lengths = Tensor::<B, 1, Int>::from_data_device(
+        let target_lengths = Tensor::<B, 1, Int>::from_data(
             Data::<i32, 1>::from(target_lengths.as_slice()).convert(),
             &self.device,
         );
@@ -79,7 +79,6 @@ impl<B: Backend> Batcher<TextImgItem, TextImgBatch<B>> for TextImgBatcher<B> {
     }
 }
 
-/// MNIST item.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct TextImgItem {
     pub image_raw: Vec<u8>,

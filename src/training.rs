@@ -3,13 +3,14 @@ use std::{fs, time::Instant};
 use burn::{
     config::Config,
     data::dataloader::DataLoaderBuilder,
-    module::{AutodiffModule, Module},
-    nn::loss::{CTCLoss, Reduction},
+    module::AutodiffModule,
+    nn::loss::Reduction,
     optim::{AdamConfig, GradientsParams, Optimizer},
     tensor::{backend::AutodiffBackend, Int, Tensor},
 };
 
 use crate::{
+    burn_ext::ctc::CTCLoss,
     converter::Converter,
     dataset::{TextImgBatcher, TextImgDataset},
     img_gen::generator::GeneratorConfig,
@@ -35,14 +36,14 @@ pub struct CRNNTrainingConfig {
 pub fn run<B: AutodiffBackend>(device: B::Device) {
     let start = Instant::now();
     // Create the configuration.
-    let config_model = CRNNConfig::new(1, 501, 256);
+    let config_model = CRNNConfig::new(1, 110001, 256);
     let config_optimizer = AdamConfig::new();
     let config = CRNNTrainingConfig::new(config_model, config_optimizer);
 
     B::seed(config.seed);
 
     // Create the model and optimizer.
-    let mut model = config.model.init().fork(&device);
+    let mut model = config.model.init(&device);
     let mut optim = config.optimizer.init();
 
     // Create the batcher.
@@ -97,8 +98,7 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
             let output = model.forward(batch.images);
             let device = output.clone().device();
             let [batch_size, seq_length, _] = output.clone().dims();
-            let input_lengths =
-                Tensor::<B, 1, Int>::full_device([batch_size], seq_length as i32, &device);
+            let input_lengths = Tensor::<B, 1, Int>::full([batch_size], seq_length as i32, &device);
             let loss = CTCLoss::new(0).forward(
                 output.clone(),
                 batch.targets.clone(),
@@ -130,7 +130,7 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
             let output = model_valid.forward(batch.images);
             let [batch_size, seq_length, _] = output.dims();
             let input_lengths =
-                Tensor::<B::InnerBackend, 1, Int>::full([batch_size], seq_length as i32);
+                Tensor::<B::InnerBackend, 1, Int>::full([batch_size], seq_length as i32, &device);
             let loss = CTCLoss::new(0).forward(
                 output.clone(),
                 batch.targets.clone(),

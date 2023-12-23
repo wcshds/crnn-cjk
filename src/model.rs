@@ -4,14 +4,16 @@ use burn::{
     nn::{
         conv::{Conv2d, Conv2dConfig},
         pool::{MaxPool2d, MaxPool2dConfig},
-        BatchNorm, BatchNormConfig, Linear, LinearConfig, Lstm, LstmConfig, ReLU,
+        BatchNorm, BatchNormConfig, Linear, LinearConfig, ReLU,
     },
     tensor::{activation, backend::Backend, Tensor},
 };
 
+use crate::burn_ext::lstm::{BiLstm, BiLstmConfig};
+
 #[derive(Module, Debug)]
 pub struct BidirectionalLSTM<B: Backend> {
-    rnn: Lstm<B>,
+    rnn: BiLstm<B>,
     embedding: Linear<B>,
 }
 
@@ -36,12 +38,10 @@ struct BidirectionalLSTMConfig {
 }
 
 impl BidirectionalLSTMConfig {
-    pub fn init<B: Backend>(&self) -> BidirectionalLSTM<B> {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> BidirectionalLSTM<B> {
         BidirectionalLSTM {
-            rnn: LstmConfig::new(self.num_channel_in, self.hidden_size, true)
-                .with_bidirectional(true)
-                .init(),
-            embedding: LinearConfig::new(self.hidden_size * 2, self.num_channel_out).init(),
+            rnn: BiLstmConfig::new(self.num_channel_in, self.hidden_size, true).init(device),
+            embedding: LinearConfig::new(self.hidden_size * 2, self.num_channel_out).init(device),
         }
     }
 }
@@ -126,11 +126,12 @@ impl CRNNConfig {
         kernel_size: [usize; 2],
         stride: [usize; 2],
         padding: [usize; 2],
+        device: &B::Device,
     ) -> Conv2d<B> {
         Conv2dConfig::new(channels, kernel_size)
             .with_stride(stride)
             .with_padding(burn::nn::PaddingConfig2d::Explicit(padding[0], padding[1]))
-            .init()
+            .init(device)
     }
 
     fn generate_pooling(
@@ -144,34 +145,40 @@ impl CRNNConfig {
             .init()
     }
 
-    pub fn init<B: Backend>(&self) -> CRNN<B> {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> CRNN<B> {
         CRNN {
-            conv0: CRNNConfig::generate_conv([self.num_channel, 64], [3, 3], [1, 1], [1, 1]),
+            conv0: CRNNConfig::generate_conv(
+                [self.num_channel, 64],
+                [3, 3],
+                [1, 1],
+                [1, 1],
+                device,
+            ),
             pooling0: CRNNConfig::generate_pooling([2, 2], [2, 2], [1, 1]),
-            conv1: CRNNConfig::generate_conv([64, 128], [3, 3], [1, 1], [1, 1]),
+            conv1: CRNNConfig::generate_conv([64, 128], [3, 3], [1, 1], [1, 1], device),
             pooling1: CRNNConfig::generate_pooling([2, 2], [2, 2], [1, 1]),
-            conv2: CRNNConfig::generate_conv([128, 256], [3, 3], [1, 1], [1, 1]),
-            batchnorm0: BatchNormConfig::new(256).init(),
+            conv2: CRNNConfig::generate_conv([128, 256], [3, 3], [1, 1], [1, 1], device),
+            batchnorm0: BatchNormConfig::new(256).init(device),
             pooling2: CRNNConfig::generate_pooling([2, 1], [2, 1], [1, 0]),
-            conv3: CRNNConfig::generate_conv([256, 512], [3, 3], [1, 1], [1, 1]),
-            batchnorm1: BatchNormConfig::new(512).init(),
+            conv3: CRNNConfig::generate_conv([256, 512], [3, 3], [1, 1], [1, 1], device),
+            batchnorm1: BatchNormConfig::new(512).init(device),
             pooling3: CRNNConfig::generate_pooling([2, 1], [2, 1], [1, 0]),
-            conv4: CRNNConfig::generate_conv([512, 512], [3, 3], [1, 1], [1, 1]),
-            batchnorm2: BatchNormConfig::new(512).init(),
+            conv4: CRNNConfig::generate_conv([512, 512], [3, 3], [1, 1], [1, 1], device),
+            batchnorm2: BatchNormConfig::new(512).init(device),
             pooling4: CRNNConfig::generate_pooling([2, 1], [2, 1], [1, 0]),
-            conv5: CRNNConfig::generate_conv([512, 512], [3, 3], [1, 1], [1, 1]),
-            batchnorm3: BatchNormConfig::new(512).init(),
+            conv5: CRNNConfig::generate_conv([512, 512], [3, 3], [1, 1], [1, 1], device),
+            batchnorm3: BatchNormConfig::new(512).init(device),
             pooling5: CRNNConfig::generate_pooling([2, 1], [2, 1], [1, 0]),
-            conv6: CRNNConfig::generate_conv([512, 512], [2, 2], [1, 1], [0, 0]),
+            conv6: CRNNConfig::generate_conv([512, 512], [2, 2], [1, 1], [0, 0], device),
             relu: ReLU::new(),
             rnn0: BidirectionalLSTMConfig::new(512, self.rnn_hidden_size, self.rnn_hidden_size)
-                .init(),
+                .init(device),
             rnn1: BidirectionalLSTMConfig::new(
                 self.rnn_hidden_size,
                 self.rnn_hidden_size,
                 self.num_classes,
             )
-            .init(),
+            .init(device),
         }
     }
 }
@@ -179,7 +186,7 @@ impl CRNNConfig {
 #[cfg(test)]
 mod test {
     use burn::{
-        backend::Wgpu,
+        backend::{ndarray::NdArrayDevice, NdArray},
         tensor::{Int, Tensor},
     };
 
@@ -187,10 +194,11 @@ mod test {
 
     #[test]
     fn test_forward() {
-        type Mybackend = Wgpu;
-        let crnn = CRNNConfig::new(1, 1000, 256).init::<Mybackend>();
+        type Mybackend = NdArray;
+        let device = NdArrayDevice::Cpu;
+        let crnn = CRNNConfig::new(1, 1000, 256).init::<Mybackend>(&device);
 
-        let input = Tensor::<Mybackend, 1, Int>::arange(0..(5 * 64 * 1000))
+        let input = Tensor::<Mybackend, 1, Int>::arange(0..(5 * 64 * 1000), &device)
             .reshape([5, 1, 64, 1000])
             .float();
 

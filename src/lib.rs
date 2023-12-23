@@ -1,3 +1,4 @@
+pub mod burn_ext;
 pub mod converter;
 pub mod dataset;
 pub mod img_gen;
