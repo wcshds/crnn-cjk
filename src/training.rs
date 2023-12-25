@@ -36,7 +36,7 @@ pub struct CRNNTrainingConfig {
 pub fn run<B: AutodiffBackend>(device: B::Device) {
     let start = Instant::now();
     // Create the configuration.
-    let config_model = CRNNConfig::new(1, 110001, 256);
+    let config_model = CRNNConfig::new(1, 1001, 256);
     let config_optimizer = AdamConfig::new();
     let config = CRNNTrainingConfig::new(config_model, config_optimizer);
 
