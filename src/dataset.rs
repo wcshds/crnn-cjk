@@ -113,8 +113,8 @@ impl TextImgDataset {
             converter,
             num_char_range,
             dataset_size,
-            thread_ids: Arc::new(Mutex::new(Vec::with_capacity(8))),
-            generators: Arc::new(RwLock::new(HashMap::with_capacity(8))),
+            thread_ids: Arc::new(Mutex::new(Vec::with_capacity(10))),
+            generators: Arc::new(RwLock::new(HashMap::with_capacity(10))),
         }
     }
 }

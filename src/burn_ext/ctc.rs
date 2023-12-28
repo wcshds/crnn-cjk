@@ -7,6 +7,8 @@ use burn::{
 };
 
 const NEG_INF: f32 = -1e5;
+// a small value used to prevent the occurrence of log(0)
+const EPSILON: f32 = f32::EPSILON;
 
 /// The Connectionist Temporal Classification loss.
 #[derive(Clone, Debug)]
@@ -132,7 +134,7 @@ impl<B: Backend> CTCLoss<B> {
                 .slice([0..batch_size, 0..seq_length, self.blank..self.blank + 1]);
         // Shape: [batch_size, seq_length, 2 * max_target_length + 1]
         let log_probs_available =
-            Tensor::<B, 3>::zeros([batch_size, seq_length, target_with_blank_length], &device);
+            Tensor::<B, 3>::empty([batch_size, seq_length, target_with_blank_length], &device);
         let log_probs_available = log_probs_available.slice_assign(
             [0..batch_size, 0..seq_length, 0..1],
             log_probs_blank_available.clone(),
@@ -150,7 +152,6 @@ impl<B: Backend> CTCLoss<B> {
             )
             .reshape([batch_size, seq_length, 2 * max_target_length]),
         );
-        let mut neg_log_likelihood = Tensor::<B, 1>::zeros([batch_size], &device);
 
         // s != s-2
         let mask_la3_letter = targets_pad
@@ -178,7 +179,7 @@ impl<B: Backend> CTCLoss<B> {
             let (alpha_prime_prev, alpha_prime_next) = if (t as i32 - min_input_length as i32) < 0 {
                 (0, 0)
             } else {
-                let prev = t - min_input_length as usize;
+                let prev = t - min_input_length;
                 (prev, prev + 1)
             };
             // \alpha_{t-1}(s)
@@ -191,15 +192,13 @@ impl<B: Backend> CTCLoss<B> {
             let la2 = la1
                 .clone()
                 .slice([0..batch_size, 0..1, 0..(target_with_blank_length - 1)])
-                // .clamp_min(NEG_INF)
-                ;
+                .clamp_min(NEG_INF);
             let la2 = pad(la2, [(0, 0), (0, 0), (1, 0)], NEG_INF);
             // \alpha_{t-1}(s-2)
             let la3 = la1
                 .clone()
                 .slice([0..batch_size, 0..1, 0..(target_with_blank_length - 2)])
-                // .clamp_min(NEG_INF)
-                ;
+                .clamp_min(NEG_INF);
             let la3 = pad(la3, [(0, 0), (0, 0), (2, 0)], NEG_INF);
             // for the logsumexp calculation
             let lamax: Tensor<B, 3> =
@@ -215,9 +214,10 @@ impl<B: Backend> CTCLoss<B> {
                 ],
                 ((la1 - lamax.clone()).exp()
                     + (la2 - lamax.clone()).exp()
-                    + (la3 - lamax.clone()).exp().mul(mask_la3.clone()))
-                .log()
-                .clamp_min(NEG_INF)
+                    + (la3 - lamax.clone()).exp().mul(mask_la3.clone())
+                    + EPSILON)
+                    .log()
+                    .clamp_min(NEG_INF)
                     + lamax
                     + log_probs_available.clone().slice([
                         0..batch_size,
@@ -254,8 +254,8 @@ impl<B: Backend> CTCLoss<B> {
         // for the logsumexp calculation
         let m = Tensor::cat([l1.clone(), l2.clone()].to_vec(), 0).max();
         let m = m.clone().clamp_min(NEG_INF);
-        let log_likelihood = ((l1 - m.clone()).exp() + (l2 - m.clone()).exp()).log() + m;
-        neg_log_likelihood = neg_log_likelihood.slice_assign([0..batch_size], -log_likelihood);
+        let log_likelihood = ((l1 - m.clone()).exp() + (l2 - m.clone()).exp() + EPSILON).log() + m;
+        let neg_log_likelihood = -log_likelihood;
 
         match reduction {
             Some(Reduction::Mean) | Some(Reduction::Auto) => {
@@ -276,7 +276,7 @@ impl<B: Backend> CTCLoss<B> {
         let [batch_size] = target_lengths.dims();
 
         let mut targets_pad =
-            Tensor::<B, 2, Int>::full([batch_size, max_target_length], blank as i32, &device);
+            Tensor::<B, 2, Int>::full([batch_size, max_target_length], blank as i32, device);
         let mut start = 0usize;
         for (batch, length) in target_lengths.iter_dim(0).enumerate() {
             let length = length.into_scalar().elem::<u32>() as usize;

@@ -345,7 +345,7 @@ mod tests {
         backend::NdArray,
         module::Param,
         nn::LinearRecord,
-        tensor::{Data, Distribution}, record::{PrettyJsonFileRecorder, FullPrecisionSettings},
+        tensor::{Data, Distribution},
     };
 
     type TestBackend = NdArray;
@@ -655,10 +655,6 @@ mod tests {
         ]]);
 
         let (_, hidden_state) = lstm.forward(input, None);
-
-        let jr = PrettyJsonFileRecorder::<FullPrecisionSettings>::new();
-        lstm.save_file(format!("./test"), &jr).expect("xxxxxxxxxxxx");
-        
 
         hidden_state.to_data().assert_approx_eq(&expected_result, 3)
     }

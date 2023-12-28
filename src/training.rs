@@ -3,9 +3,10 @@ use std::{fs, time::Instant};
 use burn::{
     config::Config,
     data::dataloader::DataLoaderBuilder,
-    module::AutodiffModule,
+    module::{AutodiffModule, Module},
     nn::loss::Reduction,
     optim::{AdamConfig, GradientsParams, Optimizer},
+    record::{BinFileRecorder, FullPrecisionSettings},
     tensor::{backend::AutodiffBackend, Int, Tensor},
 };
 
@@ -21,13 +22,13 @@ use crate::{
 pub struct CRNNTrainingConfig {
     #[config(default = 10)]
     pub num_epochs: usize,
-    #[config(default = 20)]
+    #[config(default = 30)]
     pub batch_size: usize,
-    #[config(default = 8)]
+    #[config(default = 10)]
     pub num_workers: usize,
     #[config(default = 42)]
     pub seed: u64,
-    #[config(default = 1e-5)]
+    #[config(default = 0.001)]
     pub lr: f64,
     pub model: CRNNConfig,
     pub optimizer: AdamConfig,
@@ -35,8 +36,9 @@ pub struct CRNNTrainingConfig {
 
 pub fn run<B: AutodiffBackend>(device: B::Device) {
     let start = Instant::now();
+    let bfr = BinFileRecorder::<FullPrecisionSettings>::new();
     // Create the configuration.
-    let config_model = CRNNConfig::new(1, 1001, 256);
+    let config_model = CRNNConfig::new(1, 110001, 256);
     let config_optimizer = AdamConfig::new();
     let config = CRNNTrainingConfig::new(config_model, config_optimizer);
 
@@ -45,6 +47,10 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
     // Create the model and optimizer.
     let mut model = config.model.init(&device);
     let mut optim = config.optimizer.init();
+
+    // let mut model = model
+    //     .load_file("./iter-00000", &bfr)
+    //     .unwrap();
 
     // Create the batcher.
     let batcher_train = TextImgBatcher::<B>::new(device.clone());
@@ -91,62 +97,67 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
         start.elapsed().as_secs_f64()
     );
 
+    let mut count = 0;
     // Iterate over our training and validation loop for X epochs.
-    for epoch in 1..config.num_epochs + 1 {
-        // Implement our training loop.
-        for (iteration, batch) in dataloader_train.iter().enumerate() {
-            let output = model.forward(batch.images);
-            let device = output.clone().device();
-            let [batch_size, seq_length, _] = output.clone().dims();
-            let input_lengths = Tensor::<B, 1, Int>::full([batch_size], seq_length as i32, &device);
-            let loss = CTCLoss::new(0).forward(
-                output.clone(),
-                batch.targets.clone(),
-                input_lengths.clone(),
-                batch.target_lengths.clone(),
-                Some(Reduction::Mean),
-            );
+    // Implement our training loop.
+    for (iteration, batch) in dataloader_train.iter().enumerate() {
+        let output = model.forward(batch.images);
+        let device = output.clone().device();
+        let [batch_size, seq_length, _] = output.clone().dims();
+        let input_lengths = Tensor::<B, 1, Int>::full([batch_size], seq_length as i32, &device);
+        let loss = CTCLoss::new(0).forward(
+            output.clone(),
+            batch.targets.clone(),
+            input_lengths.clone(),
+            batch.target_lengths.clone(),
+            Some(Reduction::Mean),
+        );
 
-            println!(
-                "[Train - Epoch {} - Iteration {}] Loss {:.5}",
-                epoch,
-                iteration,
-                loss.clone().into_scalar()
-            );
+        println!(
+            "[Train - Iteration {}] Loss {:.5}",
+            iteration,
+            loss.clone().into_scalar()
+        );
 
-            // Gradients for the current backward pass
-            let grads = loss.backward();
-            // Gradients linked to each parameter of the model.
-            let grads = GradientsParams::from_grads(grads, &model);
-            // Update the model using the optimizer.
-            model = optim.step(config.lr, model, grads);
+        // Gradients for the current backward pass
+        let grads = loss.backward();
+        // Gradients linked to each parameter of the model.
+        let grads = GradientsParams::from_grads(grads, &model);
+        // Update the model using the optimizer.
+        model = optim.step(config.lr, model, grads);
+
+        if iteration % 1000 == 0 {
+            model
+                .clone()
+                .save_file(format!("./iter-{count:05}"), &bfr)
+                .unwrap();
+            count += 1;
         }
+    }
 
-        // Get the model without autodiff.
-        let model_valid = model.valid();
+    // Get the model without autodiff.
+    let model_valid = model.valid();
 
-        // Implement our validation loop.
-        for (iteration, batch) in dataloader_test.iter().enumerate() {
-            let output = model_valid.forward(batch.images);
-            let [batch_size, seq_length, _] = output.dims();
-            let input_lengths =
-                Tensor::<B::InnerBackend, 1, Int>::full([batch_size], seq_length as i32, &device);
-            let loss = CTCLoss::new(0).forward(
-                output.clone(),
-                batch.targets.clone(),
-                input_lengths.clone(),
-                batch.target_lengths.clone(),
-                Some(Reduction::Mean),
-            );
-            // let accuracy = accuracy(output, batch.targets);
+    // Implement our validation loop.
+    for (iteration, batch) in dataloader_test.iter().enumerate() {
+        let output = model_valid.forward(batch.images);
+        let [batch_size, seq_length, _] = output.dims();
+        let input_lengths =
+            Tensor::<B::InnerBackend, 1, Int>::full([batch_size], seq_length as i32, &device);
+        let loss = CTCLoss::new(0).forward(
+            output.clone(),
+            batch.targets.clone(),
+            input_lengths.clone(),
+            batch.target_lengths.clone(),
+            Some(Reduction::Mean),
+        );
+        // let accuracy = accuracy(output, batch.targets);
 
-            println!(
-                "[Valid - Epoch {} - Iteration {}] Loss {}",
-                epoch,
-                iteration,
-                loss.clone().into_scalar(),
-                // accuracy,
-            );
-        }
+        println!(
+            "[Valid - Iteration {}] Loss {}",
+            iteration,
+            loss.clone().into_scalar(),
+            // accuracy,
+        );
     }
 }
