@@ -81,6 +81,8 @@ impl<B: Backend> Batcher<TextImgItem, TextImgBatch<B>> for TextImgBatcher<B> {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct TextImgItem {
+    // The raw vec of the image is passed here because GrayImage
+    // does not directly implement the Serialize trait.
     pub image_raw: Vec<u8>,
     pub image_height: usize,
     pub image_width: usize,
@@ -172,5 +174,51 @@ impl Dataset<TextImgItem> for TextImgDataset {
 
     fn len(&self) -> usize {
         self.dataset_size
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::fs;
+
+    use burn::{
+        backend::{ndarray::NdArrayDevice, NdArray},
+        data::dataloader::DataLoaderBuilder,
+    };
+
+    use super::*;
+
+    #[test]
+    fn get_dataset_tensor() {
+        let generator_config = GeneratorConfig {
+            font_size: 50,
+            line_height: 64,
+            image_width: 2000,
+            image_height: 64,
+        };
+        let lexicon = fs::read_to_string("./lexicon.txt").unwrap();
+        let converter = Converter::new(&lexicon);
+
+        let batcher_train = TextImgBatcher::<NdArray>::new(NdArrayDevice::Cpu);
+
+        let dataloader_train = DataLoaderBuilder::new(batcher_train)
+            .batch_size(2)
+            .num_workers(4)
+            .build(TextImgDataset::new(
+                10..15,
+                1000_0000,
+                "./font",
+                "./ch.txt",
+                generator_config,
+                converter.clone(),
+            ));
+
+        let mut dti = dataloader_train.iter();
+        let batch = dti.next().unwrap();
+        let tensor = batch.images;
+
+        println!("shape: {:?}", tensor.clone().dims());
+        println!("targets: {}", batch.targets);
+        fs::write("dataset-images-tensor.txt", tensor.to_data().to_string()).unwrap();
     }
 }
