@@ -1,6 +1,8 @@
+#[allow(unused_imports)]
+use burn::nn::LinearRecord;
 use burn::{
     module::Module,
-    nn::{Initializer, Linear, LinearConfig, LinearRecord},
+    nn::{Initializer, Linear, LinearConfig},
     tensor::backend::Backend,
 };
 
