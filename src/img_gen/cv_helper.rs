@@ -10,6 +10,9 @@ type Matrix8 = SMatrix<f32, 8, 8>;
 type Vector8 = SVector<f32, 8>;
 
 /// Performs the perspective matrix transformation of vectors
+///
+/// ## Reference:
+/// [OpenCV documentation](https://docs.opencv.org/4.9.0/d2/de8/group__core__array.html#gad327659ac03e5fd6894b90025e6900a7)
 pub fn perspective_transform(
     points: &Matrix4x3<f32>,
     transform_mat: &Matrix4<f32>,
@@ -40,10 +43,13 @@ pub fn perspective_transform(
     res
 }
 
+/// ## Reference:
+/// [OpenCV implementation](https://github.com/opencv/opencv/blob/4.x/modules/imgproc/src/imgwarp.cpp#L3408-L3459)
 pub fn get_perspective_transform(
     points_in: &Matrix4x2<f32>,
     points_out: &Matrix4x2<f32>,
 ) -> Matrix3<f32> {
+    // It must be transposed because nalgebra uses column major order.
     #[rustfmt::skip]
     let left = Matrix8::from_vec(vec![
         points_in.m11, points_in.m12, 1., 0., 0., 0., -points_in.m11 * points_out.m11, -points_in.m12 * points_out.m11,
