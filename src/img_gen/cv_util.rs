@@ -1,8 +1,23 @@
 use image::{imageops::FilterType, GenericImage, GrayImage, Luma};
+use imageproc::rect::Rect;
 use nalgebra::{Matrix3, Matrix4, Matrix4x2, Matrix4x3};
+use once_cell::sync::Lazy;
+use rand::{
+    distributions::{Distribution, Uniform},
+    seq::SliceRandom,
+    Rng,
+};
 
-use super::cv_helper;
+use super::cv_helper::{self, rectangle, GaussBlur};
 
+const SHARP_KERNEL: [i32; 9] = [-1, -1, -1, -1, 9, -1, -1, -1, -1]; // 3x3
+const EMBOSS_KERNEL: [i32; 9] = [-2, -1, 0, -1, 1, 1, 0, 1, 2]; // 3x3
+
+const UNIFORM_1_2: Lazy<Uniform<f64>> = Lazy::new(|| Uniform::new_inclusive(1.0, 2.0));
+const COLOR_50_255: Lazy<Uniform<u8>> = Lazy::new(|| Uniform::new_inclusive(50, 255));
+const THICKNESS: [u32; 2] = [1, 2];
+
+#[inline]
 fn get_rotate_matrix(x: f32, y: f32, z: f32) -> Matrix4<f32> {
     let x = x.to_radians();
     let y = y.to_radians();
@@ -88,6 +103,7 @@ fn get_warped_pnts(
 /// # Reference:
 /// - [https://stackoverflow.com/questions/17087446/how-to-calculate-perspective-transform-for-opencv-from-rotation-angles]
 /// - [https://nbviewer.org/github/manisoftwartist/perspectiveproj/blob/master/perspective.ipynb]
+#[inline]
 fn get_warp_matrix(
     width: usize,
     height: usize,
@@ -196,17 +212,142 @@ pub fn warp_perspective_transform(img: &GrayImage, rotate_angle: (f32, f32, f32)
     resize_img
 }
 
+pub fn apply_emboss(img: &GrayImage) -> GrayImage {
+    let res = imageproc::filter::filter3x3(&img, &EMBOSS_KERNEL);
+    res
+}
+
+pub fn apply_sharp(img: &GrayImage) -> GrayImage {
+    let res = imageproc::filter::filter3x3(&img, &SHARP_KERNEL);
+    res
+}
+
+/// Blur the image to simulate the effect of enlarging the small image
+pub fn apply_down_up(img: &GrayImage) -> GrayImage {
+    let scale = UNIFORM_1_2.sample(&mut rand::thread_rng());
+    let height = img.height();
+    let width = img.width();
+
+    let reduced = image::imageops::resize(
+        img,
+        (width as f64 / scale) as u32,
+        (height as f64 / scale) as u32,
+        FilterType::Triangle,
+    );
+    image::imageops::resize(&reduced, width, height, FilterType::Triangle)
+}
+
+pub fn gauss_blur(img: GrayImage, sigma: f32) -> GrayImage {
+    GaussBlur::gaussian_blur(img, sigma, 0.0)
+}
+
+pub fn draw_box(img: &GrayImage, alpha: f64) -> GrayImage {
+    assert!(alpha >= 1.0, "alpha should be greater than 1.0");
+
+    let (height, width) = (img.height(), img.width());
+    let (pad_height, pad_width) = (
+        (height as f64 * alpha).ceil() as u32,
+        (width as f64 * alpha).ceil() as u32,
+    );
+    let top = rand::thread_rng().gen_range(1..=(pad_height - height));
+    let left = rand::thread_rng().gen_range(1..=(pad_width - width));
+
+    let mut img_pad = GrayImage::from_pixel(pad_width, pad_height, Luma([0]));
+    img_pad
+        .copy_from(img, left, top)
+        .expect("origin image is smaller than padded image");
+
+    let box_left = rand::thread_rng().gen_range(1..=(left as i32));
+    let box_top = rand::thread_rng().gen_range(1..=(top as i32));
+    let box_width = rand::thread_rng()
+        .gen_range((width + left - box_left as u32)..=(pad_width - box_left as u32));
+    let box_height = rand::thread_rng()
+        .gen_range((height + top - box_top as u32)..=(pad_height - box_top as u32));
+
+    let rect = Rect::at(box_left, box_top).of_size(box_width, box_height);
+    let color = Luma([COLOR_50_255.sample(&mut rand::thread_rng())]);
+    let thickness = THICKNESS.choose(&mut rand::thread_rng()).unwrap().clone();
+
+    rectangle(&mut img_pad, rect, color, thickness);
+
+    img_pad
+}
+
 #[cfg(test)]
 mod test {
+    use std::time::Instant;
+
     use super::*;
 
     #[test]
     fn test_warp_perspective_transform() {
-        let img = image::open("./test.png").unwrap();
+        let start = Instant::now();
+        let img = image::open("./test-img/test.png").unwrap();
         let gray = image::imageops::grayscale(&img);
 
-        let res = warp_perspective_transform(&gray, (-30., -30., -30.));
+        let res = warp_perspective_transform(&gray, (-3., -3., -3.));
 
-        res.save("warp.png").unwrap();
+        res.save("./test-img/warp.png").unwrap();
+        println!("warp elapsed: {}", start.elapsed().as_secs_f64());
+    }
+
+    #[test]
+    fn test_sharp() {
+        let start = Instant::now();
+        let img = image::open("./test-img/test.png").unwrap();
+        let gray = image::imageops::grayscale(&img);
+
+        let res = apply_sharp(&gray);
+
+        res.save("./test-img/sharp.png").unwrap();
+        println!("sharp elapsed: {}", start.elapsed().as_secs_f64());
+    }
+
+    #[test]
+    fn test_emboss() {
+        let start = Instant::now();
+        let img = image::open("./test-img/test.png").unwrap();
+        let gray = image::imageops::grayscale(&img);
+
+        let res = apply_emboss(&gray);
+
+        res.save("./test-img/emboss.png").unwrap();
+        println!("emboss elapsed: {}", start.elapsed().as_secs_f64());
+    }
+
+    #[test]
+    fn test_down_up() {
+        let start = Instant::now();
+        let img = image::open("./test-img/test.png").unwrap();
+        let gray = image::imageops::grayscale(&img);
+
+        let res = apply_down_up(&gray);
+
+        res.save("./test-img/down_up.png").unwrap();
+        println!("down up elapsed: {}", start.elapsed().as_secs_f64());
+    }
+
+    #[test]
+    fn test_gauss_blur() {
+        let start = Instant::now();
+        let img = image::open("./test-img/test.png").unwrap();
+        let gray = image::imageops::grayscale(&img);
+
+        let res = gauss_blur(gray, 1.5);
+
+        res.save("./test-img/gauss_blur.png").unwrap();
+        println!("gauss blur elapsed: {}", start.elapsed().as_secs_f64());
+    }
+
+    #[test]
+    fn test_draw_box() {
+        let start = Instant::now();
+        let img = image::open("./test-img/test.png").unwrap();
+        let gray = image::imageops::grayscale(&img);
+
+        let res = draw_box(&gray, 1.3);
+
+        res.save("./test-img/box.png").unwrap();
+        println!("draw box elapsed: {}", start.elapsed().as_secs_f64());
     }
 }
