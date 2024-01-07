@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     converter::Converter,
     img_gen::generator::{Generator, GeneratorConfig},
-    utils::tensor_ext::pad,
 };
 
 pub struct TextImgBatcher<B: Backend> {
@@ -44,9 +43,6 @@ impl<B: Backend> Batcher<TextImgItem, TextImgBatch<B>> for TextImgBatcher<B> {
                 let data = Data::<u8, 1>::from(item.image_raw.as_slice());
                 let tensor = Tensor::<B, 1, Int>::from_data(data.convert(), &self.device).float();
                 let tensor = tensor.reshape([1, 1, item.image_height, item.image_width]);
-                let pad_left = (1000 - item.image_width) / 2;
-                let pad_right = 1000 - item.image_width - pad_left;
-                let tensor = pad(tensor, [(0, 0), (0, 0), (0, 0), (pad_left, pad_right)], 0);
                 // range: [-1.0, 1.0]
                 let tensor = ((tensor / 255) - 0.5) / 0.5;
                 tensor
@@ -91,12 +87,12 @@ pub struct TextImgItem {
 }
 
 pub struct TextImgDataset {
-    generator: Generator,
+    generator: Generator<String>,
     converter: Converter,
     num_char_range: Range<usize>,
     dataset_size: usize,
     thread_ids: Arc<Mutex<Vec<ThreadId>>>,
-    generators: Arc<RwLock<HashMap<ThreadId, Generator>>>,
+    generators: Arc<RwLock<HashMap<ThreadId, Generator<String>>>>,
 }
 
 impl TextImgDataset {
@@ -105,7 +101,7 @@ impl TextImgDataset {
         dataset_size: usize,
         font_dir: &str,
         chinese_ch_file: &str,
-        config: GeneratorConfig,
+        config: GeneratorConfig<String>,
         converter: Converter,
     ) -> Self {
         let generator = Generator::new(font_dir, chinese_ch_file, config);
@@ -158,9 +154,10 @@ impl Dataset<TextImgItem> for TextImgDataset {
             .collect();
         let img = generator.gen_image_from_cjk(&text, [255, 255, 255], [0, 0, 0]);
         let gray = image::imageops::grayscale(&img);
-        let image_height = gray.height() as usize;
-        let image_width = gray.width() as usize;
-        let image_raw = gray.into_vec();
+        let final_img = generator.apply_effect(gray);
+        let image_height = final_img.height() as usize;
+        let image_width = final_img.width() as usize;
+        let image_raw = final_img.into_vec();
         let (target, target_len) = self.converter.encode_single(&text);
 
         Some(TextImgItem {
@@ -190,12 +187,7 @@ mod test {
 
     #[test]
     fn get_dataset_tensor() {
-        let generator_config = GeneratorConfig {
-            font_size: 50,
-            line_height: 64,
-            image_width: 2000,
-            image_height: 64,
-        };
+        let generator_config = GeneratorConfig::default();
         let lexicon = fs::read_to_string("./lexicon.txt").unwrap();
         let converter = Converter::new(&lexicon);
 

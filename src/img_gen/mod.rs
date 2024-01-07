@@ -1,9 +1,10 @@
 mod corpus;
-pub(super) mod cv_helper;
 pub mod cv_util;
+pub(super) mod effect_helper;
 mod font_util;
 pub mod generator;
 mod init;
+pub mod merge_util;
 
 #[cfg(test)]
 mod test {

@@ -1,5 +1,6 @@
 use std::{
     fs,
+    path::Path,
     sync::{Arc, RwLock},
 };
 
@@ -7,32 +8,93 @@ use cosmic_text::{
     Attrs, AttrsList, AttrsOwned, Buffer, BufferLine, Family, FontSystem, Metrics, Shaping,
     Stretch, Style, SwashCache, Weight,
 };
-use image::{GenericImage, GenericImageView, ImageBuffer};
+use image::{GenericImage, GenericImageView, GrayImage, ImageBuffer};
 use indexmap::IndexMap;
 use rand::seq::SliceRandom;
 use rand_distr::WeightedAliasIndex;
 
-use super::{corpus::wrap_text_with_font_list, font_util::FontUtil, init::init_ch_dict_and_weight};
+use super::{
+    corpus::wrap_text_with_font_list,
+    cv_util::CvUtil,
+    effect_helper::math::Random,
+    font_util::FontUtil,
+    init::init_ch_dict_and_weight,
+    merge_util::{BgFactory, MergeUtil},
+};
 
 #[derive(Copy, Clone)]
-pub struct GeneratorConfig {
+pub struct GeneratorConfig<P: AsRef<Path> + Clone> {
     pub font_size: usize,
     pub line_height: usize,
-    pub image_width: usize,
-    pub image_height: usize,
+    pub font_img_height: usize,
+    pub font_img_width: usize,
+    // 1. cv_util
+    // draw box
+    pub box_prob: f64,
+    // perspective transform
+    pub perspective_prob: f64,
+    pub perspective_x: Random,
+    pub perspective_y: Random,
+    pub perspective_z: Random,
+    // gaussian blur
+    pub blur_prob: f64,
+    pub blur_sigma: Random,
+    // filter: emboss/sharp
+    pub filter_prob: f64,
+    pub emboss_prob: f64,
+    pub sharp_prob: f64,
+    // 2. merge_util
+    pub bg_dir: P,
+    pub bg_height: usize,
+    pub bg_width: usize,
+    pub height_diff: Random,
+    pub bg_alpha: Random,
+    pub bg_beta: Random,
+    pub font_alpha: Random,
+}
+
+impl Default for GeneratorConfig<String> {
+    fn default() -> Self {
+        GeneratorConfig {
+            font_size: 50,
+            line_height: 64,
+            font_img_width: 2000,
+            font_img_height: 64,
+            box_prob: 0.1,
+            perspective_prob: 0.2,
+            perspective_x: Random::new_gaussian(-15.0, 15.0),
+            perspective_y: Random::new_gaussian(-15.0, 15.0),
+            perspective_z: Random::new_gaussian(-3.0, 3.0),
+            blur_prob: 0.1,
+            blur_sigma: Random::new_uniform(0.0, 1.5),
+            filter_prob: 0.01,
+            emboss_prob: 0.4,
+            sharp_prob: 0.6,
+            bg_dir: "./synth_text/background".to_string(),
+            bg_height: 64,
+            bg_width: 1000,
+            height_diff: Random::new_uniform(2.0, 10.0),
+            bg_alpha: Random::new_gaussian(0.5, 1.5),
+            bg_beta: Random::new_gaussian(-50.0, 50.0),
+            font_alpha: Random::new_uniform(0.2, 1.0),
+        }
+    }
 }
 
 /// Generate images of Chinese characters, including rare Chinese characters
-pub struct Generator {
+pub struct Generator<P: AsRef<Path> + Clone> {
     font_util: FontUtil,
+    cv_util: CvUtil,
+    merge_util: MergeUtil,
+    bg_factory: BgFactory,
     editor: Arc<RwLock<Buffer>>,
     swash_cache: Arc<RwLock<SwashCache>>,
     chinese_ch_dict: IndexMap<String, Vec<AttrsOwned>>,
     chinese_ch_weights: WeightedAliasIndex<f64>,
-    config: GeneratorConfig,
+    config: GeneratorConfig<P>,
 }
 
-impl Clone for Generator {
+impl<P: AsRef<Path> + Clone> Clone for Generator<P> {
     fn clone(&self) -> Self {
         let font_system_origin = self.font_util.font_system.read().unwrap();
         let mut font_system = FontSystem::new_with_locale_and_db(
@@ -48,13 +110,16 @@ impl Clone for Generator {
         );
         editor.set_size(
             &mut font_system,
-            self.config.image_width as f32,
-            self.config.image_height as f32,
+            self.config.font_img_width as f32,
+            self.config.font_img_height as f32,
         );
 
         let font_util = FontUtil::new(font_system);
         Self {
             font_util,
+            cv_util: self.cv_util.clone(),
+            merge_util: self.merge_util.clone(),
+            bg_factory: self.bg_factory.clone(),
             editor: Arc::new(RwLock::new(editor)),
             swash_cache: Arc::new(RwLock::new(swash_cache)),
             chinese_ch_dict: self.chinese_ch_dict.clone(),
@@ -65,8 +130,8 @@ impl Clone for Generator {
 }
 
 // todo: image enhancement
-impl Generator {
-    pub fn new(font_dir: &str, chinese_ch_file: &str, config: GeneratorConfig) -> Self {
+impl<P: AsRef<Path> + Clone> Generator<P> {
+    pub fn new(font_dir: &str, chinese_ch_file: &str, config: GeneratorConfig<P>) -> Self {
         let mut font_system = FontSystem::new();
         let db = font_system.db_mut();
         db.load_fonts_dir(font_dir);
@@ -80,8 +145,8 @@ impl Generator {
         );
         editor.set_size(
             &mut font_system,
-            config.image_width as f32,
-            config.image_height as f32,
+            config.font_img_width as f32,
+            config.font_img_height as f32,
         );
 
         let font_util = FontUtil::new(font_system);
@@ -91,8 +156,31 @@ impl Generator {
         let (chinese_ch_dict, chinese_ch_weights) =
             init_ch_dict_and_weight(&font_util, &full_font_list, &chinese_character_file_data);
 
+        let cv_util = CvUtil {
+            box_prob: config.box_prob,
+            perspective_prob: config.perspective_prob,
+            perspective_x: config.perspective_x,
+            perspective_y: config.perspective_y,
+            perspective_z: config.perspective_z,
+            blur_prob: config.blur_prob,
+            blur_sigma: config.blur_sigma,
+            filter_prob: config.filter_prob,
+            emboss_prob: config.emboss_prob,
+            sharp_prob: config.sharp_prob,
+        };
+        let merge_util = MergeUtil {
+            height_diff: config.height_diff,
+            bg_alpha: config.bg_alpha,
+            bg_beta: config.bg_beta,
+            font_alpha: config.font_alpha,
+        };
+        let bg_factory = BgFactory::new(config.bg_dir.clone(), config.bg_height, config.bg_width);
+
         Self {
             font_util,
+            cv_util,
+            merge_util,
+            bg_factory,
             editor: Arc::new(RwLock::new(editor)),
             swash_cache: Arc::new(RwLock::new(swash_cache)),
             chinese_ch_dict,
@@ -107,8 +195,8 @@ impl Generator {
         background_color: [u8; 3],
     ) -> ImageBuffer<image::Rgb<u8>, Vec<u8>> {
         let mut raw_image = ImageBuffer::from_pixel(
-            self.config.image_width as u32,
-            self.config.image_height as u32,
+            self.config.font_img_width as u32,
+            self.config.font_img_height as u32,
             image::Rgb(background_color),
         );
         let mut right_border = 0;
@@ -127,9 +215,9 @@ impl Generator {
             ),
             |x, y, _, _, color| {
                 if x < 0
-                    || x >= self.config.image_width as i32
+                    || x >= self.config.font_img_width as i32
                     || y < 0
-                    || y >= self.config.image_height as i32
+                    || y >= self.config.font_img_height as i32
                     || (x == 0 && y == 0)
                 {
                     return;
@@ -167,7 +255,7 @@ impl Generator {
                 0,
                 0,
                 (right_border + 1) as u32,
-                self.config.image_height as u32,
+                self.config.font_img_height as u32,
             )
             .to_image()
     }
@@ -229,6 +317,14 @@ impl Generator {
     pub fn get_chinese_ch_weights(&self) -> &WeightedAliasIndex<f64> {
         &self.chinese_ch_weights
     }
+
+    pub fn apply_effect(&self, font_img: GrayImage) -> GrayImage {
+        let font_img = self.cv_util.apply_effect(font_img);
+        let bg_img = self.bg_factory.random();
+        let merge = self.merge_util.poisson_edit(&font_img, bg_img);
+
+        merge
+    }
 }
 
 #[cfg(test)]
@@ -239,14 +335,22 @@ mod test {
     fn test_chinese_image_gen() {
         let font_dir = "./font";
         let chinese_ch_file = "./ch.txt";
-        let config = GeneratorConfig {
-            font_size: 50,
-            line_height: 64,
-            image_width: 2000,
-            image_height: 64,
-        };
+        let config = GeneratorConfig::default();
         let generator = Generator::new(font_dir, chinese_ch_file, config);
         let img = generator.gen_image_from_cjk("今天天氣眞好", [255, 105, 105], [166, 208, 221]);
         img.save("test.png").unwrap();
+    }
+
+    #[test]
+    fn test_effect() {
+        let font_dir = "./font";
+        let chinese_ch_file = "./ch.txt";
+        let config = GeneratorConfig::default();
+        let generator = Generator::new(font_dir, chinese_ch_file, config);
+        let img = generator.gen_image_from_cjk("今天天氣眞好", [255, 255, 255], [0, 0, 0]);
+        let gray = image::imageops::grayscale(&img);
+
+        let res = generator.apply_effect(gray);
+        res.save("./test-img/generator.png").unwrap();
     }
 }

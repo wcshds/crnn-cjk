@@ -56,12 +56,7 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
     let batcher_train = TextImgBatcher::<B>::new(device.clone());
     let batcher_valid = TextImgBatcher::<B::InnerBackend>::new(device.clone());
 
-    let generator_config = GeneratorConfig {
-        font_size: 50,
-        line_height: 64,
-        image_width: 2000,
-        image_height: 64,
-    };
+    let generator_config = GeneratorConfig::<String>::default();
     let lexicon = fs::read_to_string("./lexicon.txt").unwrap();
     let converter = Converter::new(&lexicon);
 
@@ -75,7 +70,7 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
             1000_0000,
             "./font",
             "./ch.txt",
-            generator_config,
+            generator_config.clone(),
             converter.clone(),
         ));
 

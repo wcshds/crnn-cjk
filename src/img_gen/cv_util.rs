@@ -8,14 +8,11 @@ use rand::{
     Rng,
 };
 
-use super::cv_helper::{self, rectangle, GaussBlur};
-
-const SHARP_KERNEL: [i32; 9] = [-1, -1, -1, -1, 9, -1, -1, -1, -1]; // 3x3
-const EMBOSS_KERNEL: [i32; 9] = [-2, -1, 0, -1, 1, 1, 0, 1, 2]; // 3x3
-
-const UNIFORM_1_2: Lazy<Uniform<f64>> = Lazy::new(|| Uniform::new_inclusive(1.0, 2.0));
-const COLOR_50_255: Lazy<Uniform<u8>> = Lazy::new(|| Uniform::new_inclusive(50, 255));
-const THICKNESS: [u32; 2] = [1, 2];
+use super::effect_helper::{
+    cv::{self, rectangle},
+    gaussian_blur::GaussBlur,
+    math::Random,
+};
 
 #[inline]
 fn get_rotate_matrix(x: f32, y: f32, z: f32) -> Matrix4<f32> {
@@ -148,129 +145,198 @@ fn get_warp_matrix(
     );
 
     let points_out: Matrix4x3<f32> =
-        cv_helper::perspective_transform(&points_in, &perspective_transform_mat);
+        cv::perspective_transform(&points_in, &perspective_transform_mat);
 
     let (points_in, points_out) =
         get_warped_pnts(&points_in, &points_out, width, height, side_length);
 
     (
-        cv_helper::get_perspective_transform(&points_in, &points_out),
+        cv::get_perspective_transform(&points_in, &points_out),
         side_length,
         points_in,
         points_out,
     )
 }
 
-/// Perform a perspective transform and crop the transformed text area.
-pub fn warp_perspective_transform(img: &GrayImage, rotate_angle: (f32, f32, f32)) -> GrayImage {
-    let (raw_height, raw_width) = (img.height(), img.width());
+const SHARP_KERNEL: [i32; 9] = [-1, -1, -1, -1, 9, -1, -1, -1, -1]; // 3x3
+const EMBOSS_KERNEL: [i32; 9] = [-2, -1, 0, -1, 1, 1, 0, 1, 2]; // 3x3
 
-    let (transform_mat, side_length, _, points_out) = get_warp_matrix(
-        raw_width as usize,
-        raw_height as usize,
-        rotate_angle,
-        1.0,
-        50.,
-    );
+const UNIFORM_1_2: Lazy<Uniform<f64>> = Lazy::new(|| Uniform::new_inclusive(1.0, 2.0));
+const COLOR_50_255: Lazy<Uniform<u8>> = Lazy::new(|| Uniform::new_inclusive(50, 255));
+const THICKNESS: [u32; 2] = [1, 2];
 
-    let (raw_height, raw_width) = (raw_height as f32, raw_width as f32);
-    let side_length = side_length.ceil() as u32;
+#[derive(Clone)]
+pub struct CvUtil {
+    // draw box
+    pub box_prob: f64,
+    // perspective transform
+    pub perspective_prob: f64,
+    pub perspective_x: Random,
+    pub perspective_y: Random,
+    pub perspective_z: Random,
+    // gaussian blur
+    pub blur_prob: f64,
+    pub blur_sigma: Random,
+    // filter: emboss/sharp
+    pub filter_prob: f64,
+    pub emboss_prob: f64,
+    pub sharp_prob: f64,
+}
 
-    let mut warp_img = cv_helper::warp_perspective(img, &transform_mat, side_length, Luma([0]));
+impl CvUtil {
+    const UNIFORM_0_1: Lazy<Uniform<f64>> = Lazy::new(|| Uniform::new_inclusive(0.0, 1.0));
 
-    let (min_x, max_x, min_y, max_y) = (
-        points_out.column(0).min(),
-        points_out.column(0).max(),
-        points_out.column(1).min(),
-        points_out.column(1).max(),
-    );
-    let (min_x, min_y, max_x, max_y) = (
-        min_x.floor() as u32,
-        min_y.floor() as u32,
-        max_x.ceil() as u32,
-        max_y.ceil() as u32,
-    );
-    let crop_img = warp_img
-        .sub_image(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
-        .to_image();
-
-    let (new_height, new_width) = (crop_img.height() as f32, crop_img.width() as f32);
-    let (resize_width, resize_height) = (
-        (new_width * raw_height / new_height).ceil() as u32,
-        raw_height as u32,
-    );
-    let resize_img = if resize_width <= raw_width as u32 && resize_height <= raw_height as u32 {
-        image::imageops::resize(&crop_img, resize_width, resize_height, FilterType::Triangle)
-    } else {
-        let (resize_width, resize_height) = (
-            raw_width as u32,
-            (new_height * raw_width / new_width).ceil() as u32,
+    pub fn apply_effect(&self, img: GrayImage) -> GrayImage {
+        assert!(
+            self.emboss_prob + self.sharp_prob == 1.0,
+            "emboss probability plus sharp probability should be equal to 1.0"
         );
-        image::imageops::resize(&crop_img, resize_width, resize_height, FilterType::Triangle)
-    };
 
-    resize_img
-}
+        let img = if Self::UNIFORM_0_1.sample(&mut rand::thread_rng()) < self.box_prob {
+            Self::draw_box(&img, 1.3)
+        } else {
+            img
+        };
 
-pub fn apply_emboss(img: &GrayImage) -> GrayImage {
-    let res = imageproc::filter::filter3x3(&img, &EMBOSS_KERNEL);
-    res
-}
+        let img = if Self::UNIFORM_0_1.sample(&mut rand::thread_rng()) < self.perspective_prob {
+            let rotate_angle = (
+                self.perspective_x.sample() as f32,
+                self.perspective_y.sample() as f32,
+                self.perspective_z.sample() as f32,
+            );
+            Self::warp_perspective_transform(&img, rotate_angle)
+        } else {
+            img
+        };
 
-pub fn apply_sharp(img: &GrayImage) -> GrayImage {
-    let res = imageproc::filter::filter3x3(&img, &SHARP_KERNEL);
-    res
-}
+        if Self::UNIFORM_0_1.sample(&mut rand::thread_rng()) < self.blur_prob {
+            let sigma = self.blur_sigma.sample() as f32;
+            let img = Self::gauss_blur(img, sigma);
+            if Self::UNIFORM_0_1.sample(&mut rand::thread_rng()) < self.filter_prob {
+                if Self::UNIFORM_0_1.sample(&mut rand::thread_rng()) < self.emboss_prob {
+                    Self::apply_emboss(&img)
+                } else {
+                    Self::apply_sharp(&img)
+                }
+            } else {
+                img
+            }
+        } else {
+            img
+        }
+    }
 
-/// Blur the image to simulate the effect of enlarging the small image
-pub fn apply_down_up(img: &GrayImage) -> GrayImage {
-    let scale = UNIFORM_1_2.sample(&mut rand::thread_rng());
-    let height = img.height();
-    let width = img.width();
+    /// Perform a perspective transform and crop the transformed text area.
+    pub fn warp_perspective_transform(img: &GrayImage, rotate_angle: (f32, f32, f32)) -> GrayImage {
+        let (raw_height, raw_width) = (img.height(), img.width());
 
-    let reduced = image::imageops::resize(
-        img,
-        (width as f64 / scale) as u32,
-        (height as f64 / scale) as u32,
-        FilterType::Triangle,
-    );
-    image::imageops::resize(&reduced, width, height, FilterType::Triangle)
-}
+        let (transform_mat, side_length, _, points_out) = get_warp_matrix(
+            raw_width as usize,
+            raw_height as usize,
+            rotate_angle,
+            1.0,
+            50.,
+        );
 
-pub fn gauss_blur(img: GrayImage, sigma: f32) -> GrayImage {
-    GaussBlur::gaussian_blur(img, sigma, 0.0)
-}
+        let (raw_height, raw_width) = (raw_height as f32, raw_width as f32);
+        let side_length = side_length.ceil() as u32;
 
-pub fn draw_box(img: &GrayImage, alpha: f64) -> GrayImage {
-    assert!(alpha >= 1.0, "alpha should be greater than 1.0");
+        let mut warp_img = cv::warp_perspective(img, &transform_mat, side_length, Luma([0]));
 
-    let (height, width) = (img.height(), img.width());
-    let (pad_height, pad_width) = (
-        (height as f64 * alpha).ceil() as u32,
-        (width as f64 * alpha).ceil() as u32,
-    );
-    let top = rand::thread_rng().gen_range(1..=(pad_height - height));
-    let left = rand::thread_rng().gen_range(1..=(pad_width - width));
+        let (min_x, max_x, min_y, max_y) = (
+            points_out.column(0).min(),
+            points_out.column(0).max(),
+            points_out.column(1).min(),
+            points_out.column(1).max(),
+        );
+        let (min_x, min_y, max_x, max_y) = (
+            min_x.floor() as u32,
+            min_y.floor() as u32,
+            max_x.ceil() as u32,
+            max_y.ceil() as u32,
+        );
+        let crop_img = warp_img
+            .sub_image(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+            .to_image();
 
-    let mut img_pad = GrayImage::from_pixel(pad_width, pad_height, Luma([0]));
-    img_pad
-        .copy_from(img, left, top)
-        .expect("origin image is smaller than padded image");
+        let (new_height, new_width) = (crop_img.height() as f32, crop_img.width() as f32);
+        let (resize_width, resize_height) = (
+            (new_width * raw_height / new_height).ceil() as u32,
+            raw_height as u32,
+        );
+        let resize_img = if resize_width <= raw_width as u32 && resize_height <= raw_height as u32 {
+            image::imageops::resize(&crop_img, resize_width, resize_height, FilterType::Triangle)
+        } else {
+            let (resize_width, resize_height) = (
+                raw_width as u32,
+                (new_height * raw_width / new_width).ceil() as u32,
+            );
+            image::imageops::resize(&crop_img, resize_width, resize_height, FilterType::Triangle)
+        };
 
-    let box_left = rand::thread_rng().gen_range(1..=(left as i32));
-    let box_top = rand::thread_rng().gen_range(1..=(top as i32));
-    let box_width = rand::thread_rng()
-        .gen_range((width + left - box_left as u32)..=(pad_width - box_left as u32));
-    let box_height = rand::thread_rng()
-        .gen_range((height + top - box_top as u32)..=(pad_height - box_top as u32));
+        resize_img
+    }
 
-    let rect = Rect::at(box_left, box_top).of_size(box_width, box_height);
-    let color = Luma([COLOR_50_255.sample(&mut rand::thread_rng())]);
-    let thickness = THICKNESS.choose(&mut rand::thread_rng()).unwrap().clone();
+    pub fn apply_emboss(img: &GrayImage) -> GrayImage {
+        let res = imageproc::filter::filter3x3(&img, &EMBOSS_KERNEL);
+        res
+    }
 
-    rectangle(&mut img_pad, rect, color, thickness);
+    pub fn apply_sharp(img: &GrayImage) -> GrayImage {
+        let res = imageproc::filter::filter3x3(&img, &SHARP_KERNEL);
+        res
+    }
 
-    img_pad
+    /// Blur the image to simulate the effect of enlarging the small image
+    pub fn apply_down_up(img: &GrayImage) -> GrayImage {
+        let scale = UNIFORM_1_2.sample(&mut rand::thread_rng());
+        let height = img.height();
+        let width = img.width();
+
+        let reduced = image::imageops::resize(
+            img,
+            (width as f64 / scale) as u32,
+            (height as f64 / scale) as u32,
+            FilterType::Triangle,
+        );
+        image::imageops::resize(&reduced, width, height, FilterType::Triangle)
+    }
+
+    pub fn gauss_blur(img: GrayImage, sigma: f32) -> GrayImage {
+        GaussBlur::gaussian_blur(img, sigma, 0.0)
+    }
+
+    pub fn draw_box(img: &GrayImage, alpha: f64) -> GrayImage {
+        assert!(alpha >= 1.0, "alpha should be greater than 1.0");
+
+        let (height, width) = (img.height(), img.width());
+        let (pad_height, pad_width) = (
+            (height as f64 * alpha).ceil() as u32,
+            (width as f64 * alpha).ceil() as u32,
+        );
+        let top = rand::thread_rng().gen_range(1..=(pad_height - height));
+        let left = rand::thread_rng().gen_range(1..=(pad_width - width));
+
+        let mut img_pad = GrayImage::from_pixel(pad_width, pad_height, Luma([0]));
+        img_pad
+            .copy_from(img, left, top)
+            .expect("origin image is smaller than padded image");
+
+        let box_left = rand::thread_rng().gen_range(1..=(left as i32));
+        let box_top = rand::thread_rng().gen_range(1..=(top as i32));
+        let box_width = rand::thread_rng()
+            .gen_range((width + left - box_left as u32)..=(pad_width - box_left as u32));
+        let box_height = rand::thread_rng()
+            .gen_range((height + top - box_top as u32)..=(pad_height - box_top as u32));
+
+        let rect = Rect::at(box_left, box_top).of_size(box_width, box_height);
+        let color = Luma([COLOR_50_255.sample(&mut rand::thread_rng())]);
+        let thickness = THICKNESS.choose(&mut rand::thread_rng()).unwrap().clone();
+
+        rectangle(&mut img_pad, rect, color, thickness);
+
+        image::imageops::resize(&img_pad, width, height, FilterType::Triangle)
+    }
 }
 
 #[cfg(test)]
@@ -279,13 +345,41 @@ mod test {
 
     use super::*;
 
+    fn create_cv_util() -> CvUtil {
+        CvUtil {
+            box_prob: 0.1,
+            perspective_prob: 0.2,
+            perspective_x: Random::new_gaussian(-15.0, 15.0),
+            perspective_y: Random::new_gaussian(-15.0, 15.0),
+            perspective_z: Random::new_gaussian(-3.0, 3.0),
+            blur_prob: 0.1,
+            blur_sigma: Random::new_uniform(0.0, 1.5),
+            filter_prob: 0.01,
+            emboss_prob: 0.4,
+            sharp_prob: 0.6,
+        }
+    }
+
+    #[test]
+    fn test_effect() {
+        let start = Instant::now();
+        let img = image::open("./test-img/test.png").unwrap();
+        let gray = image::imageops::grayscale(&img);
+
+        let cv_util = create_cv_util();
+        let res = cv_util.apply_effect(gray);
+
+        res.save("./test-img/cv_effect.png").unwrap();
+        println!("cv effect elapsed: {}", start.elapsed().as_secs_f64());
+    }
+
     #[test]
     fn test_warp_perspective_transform() {
         let start = Instant::now();
         let img = image::open("./test-img/test.png").unwrap();
         let gray = image::imageops::grayscale(&img);
 
-        let res = warp_perspective_transform(&gray, (-3., -3., -3.));
+        let res = CvUtil::warp_perspective_transform(&gray, (-3., -3., -3.));
 
         res.save("./test-img/warp.png").unwrap();
         println!("warp elapsed: {}", start.elapsed().as_secs_f64());
@@ -297,7 +391,7 @@ mod test {
         let img = image::open("./test-img/test.png").unwrap();
         let gray = image::imageops::grayscale(&img);
 
-        let res = apply_sharp(&gray);
+        let res = CvUtil::apply_sharp(&gray);
 
         res.save("./test-img/sharp.png").unwrap();
         println!("sharp elapsed: {}", start.elapsed().as_secs_f64());
@@ -309,7 +403,7 @@ mod test {
         let img = image::open("./test-img/test.png").unwrap();
         let gray = image::imageops::grayscale(&img);
 
-        let res = apply_emboss(&gray);
+        let res = CvUtil::apply_emboss(&gray);
 
         res.save("./test-img/emboss.png").unwrap();
         println!("emboss elapsed: {}", start.elapsed().as_secs_f64());
@@ -321,7 +415,7 @@ mod test {
         let img = image::open("./test-img/test.png").unwrap();
         let gray = image::imageops::grayscale(&img);
 
-        let res = apply_down_up(&gray);
+        let res = CvUtil::apply_down_up(&gray);
 
         res.save("./test-img/down_up.png").unwrap();
         println!("down up elapsed: {}", start.elapsed().as_secs_f64());
@@ -333,10 +427,10 @@ mod test {
         let img = image::open("./test-img/test.png").unwrap();
         let gray = image::imageops::grayscale(&img);
 
-        let res = gauss_blur(gray, 1.5);
+        let res = CvUtil::gauss_blur(gray, 1.5);
 
         res.save("./test-img/gauss_blur.png").unwrap();
-        println!("gauss blur elapsed: {}", start.elapsed().as_secs_f64());
+        println!("gaussian blur elapsed: {}", start.elapsed().as_secs_f64());
     }
 
     #[test]
@@ -345,7 +439,7 @@ mod test {
         let img = image::open("./test-img/test.png").unwrap();
         let gray = image::imageops::grayscale(&img);
 
-        let res = draw_box(&gray, 1.3);
+        let res = CvUtil::draw_box(&gray, 1.3);
 
         res.save("./test-img/box.png").unwrap();
         println!("draw box elapsed: {}", start.elapsed().as_secs_f64());
