@@ -6,7 +6,11 @@ use burn::{
         pool::{MaxPool2d, MaxPool2dConfig},
         BatchNorm, BatchNormConfig, Linear, LinearConfig, ReLU,
     },
-    tensor::{activation, backend::Backend, Tensor},
+    tensor::{
+        activation,
+        backend::{AutodiffBackend, Backend},
+        Tensor,
+    },
 };
 
 use crate::burn_ext::lstm::{BiLstm, BiLstmConfig};
@@ -110,6 +114,33 @@ impl<B: Backend> CRNN<B> {
         let output = activation::log_softmax(output, 2);
 
         output
+    }
+}
+
+impl<B: AutodiffBackend> CRNN<B> {
+    pub fn no_grad_cnn(self) -> Self {
+        Self {
+            conv0: self.conv0.no_grad(),
+            conv1: self.conv1.no_grad(),
+            conv2: self.conv2.no_grad(),
+            conv3: self.conv3.no_grad(),
+            conv4: self.conv4.no_grad(),
+            conv5: self.conv5.no_grad(),
+            conv6: self.conv6.no_grad(),
+            batchnorm0: self.batchnorm0.no_grad(),
+            batchnorm1: self.batchnorm1.no_grad(),
+            batchnorm2: self.batchnorm2.no_grad(),
+            batchnorm3: self.batchnorm3.no_grad(),
+            ..self
+        }
+    }
+
+    pub fn no_grad_rnn(self) -> Self {
+        Self {
+            rnn0: self.rnn0.no_grad(),
+            rnn1: self.rnn1.no_grad(),
+            ..self
+        }
     }
 }
 
