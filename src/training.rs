@@ -20,15 +20,13 @@ use crate::{
 
 #[derive(Config)]
 pub struct CRNNTrainingConfig {
-    #[config(default = 10)]
-    pub num_epochs: usize,
-    #[config(default = 30)]
+    #[config(default = 35)]
     pub batch_size: usize,
-    #[config(default = 10)]
+    #[config(default = 8)]
     pub num_workers: usize,
-    #[config(default = 42)]
+    #[config(default = 3407)]
     pub seed: u64,
-    #[config(default = 0.001)]
+    #[config(default = 0.01)]
     pub lr: f64,
     pub model: CRNNConfig,
     pub optimizer: AdamConfig,
