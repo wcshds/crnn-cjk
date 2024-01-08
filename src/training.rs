@@ -56,7 +56,7 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
     let batcher_train = TextImgBatcher::<B>::new(device.clone());
     let batcher_valid = TextImgBatcher::<B::InnerBackend>::new(device.clone());
 
-    let generator_config = GeneratorConfig::<String>::default();
+    let generator_config = GeneratorConfig::from_yaml("./synth_text/config.yaml");
     let lexicon = fs::read_to_string("./lexicon.txt").unwrap();
     let converter = Converter::new(&lexicon);
 

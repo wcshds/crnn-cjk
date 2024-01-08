@@ -1,6 +1,6 @@
 use rand::distributions::Distribution;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Random {
     Uniform(rand::distributions::Uniform<f64>),
     Gaussian((f64, f64, rand_distr::Normal<f64>)), // min_val, max_val, GaussianDistr

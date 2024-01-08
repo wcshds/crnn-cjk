@@ -176,7 +176,7 @@ impl Dataset<TextImgItem> for TextImgDataset {
 
 #[cfg(test)]
 mod test {
-    use std::fs;
+    use std::{fs, time::Instant};
 
     use burn::{
         backend::{ndarray::NdArrayDevice, NdArray},
@@ -206,7 +206,9 @@ mod test {
             ));
 
         let mut dti = dataloader_train.iter();
+        let start = Instant::now();
         let batch = dti.next().unwrap();
+        println!("{}", start.elapsed().as_secs_f64());
         let tensor = batch.images;
 
         println!("shape: {:?}", tensor.clone().dims());

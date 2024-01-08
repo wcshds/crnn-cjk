@@ -12,6 +12,7 @@ use image::{GenericImage, GenericImageView, GrayImage, ImageBuffer};
 use indexmap::IndexMap;
 use rand::seq::SliceRandom;
 use rand_distr::WeightedAliasIndex;
+use serde::{Deserialize, Serialize};
 
 use super::{
     corpus::wrap_text_with_font_list,
@@ -22,7 +23,7 @@ use super::{
     merge_util::{BgFactory, MergeUtil},
 };
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct GeneratorConfig<P: AsRef<Path> + Clone> {
     pub font_size: usize,
     pub line_height: usize,
@@ -51,6 +52,7 @@ pub struct GeneratorConfig<P: AsRef<Path> + Clone> {
     pub bg_alpha: Random,
     pub bg_beta: Random,
     pub font_alpha: Random,
+    pub reverse_prob: f64,
 }
 
 impl Default for GeneratorConfig<String> {
@@ -77,6 +79,97 @@ impl Default for GeneratorConfig<String> {
             bg_alpha: Random::new_gaussian(0.5, 1.5),
             bg_beta: Random::new_gaussian(-50.0, 50.0),
             font_alpha: Random::new_uniform(0.2, 1.0),
+            reverse_prob: 0.5,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct FontYaml {
+    font_size: usize,
+    line_height: usize,
+    font_img_height: usize,
+    font_img_width: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct RandomYaml(f64, f64, String);
+
+impl RandomYaml {
+    fn to_random(&self) -> Random {
+        if self.2 == "g" {
+            Random::new_gaussian(self.0, self.1)
+        } else if self.2 == "u" {
+            Random::new_uniform(self.0, self.1)
+        } else {
+            panic!("distribution parameter in config file should be `g` or `u`");
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct CvYaml {
+    box_prob: f64,
+    perspective_prob: f64,
+    perspective_x: RandomYaml,
+    perspective_y: RandomYaml,
+    perspective_z: RandomYaml,
+    blur_prob: f64,
+    blur_sigma: RandomYaml,
+    filter_prob: f64,
+    emboss_prob: f64,
+    sharp_prob: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct MergeYaml {
+    pub bg_dir: String,
+    pub bg_height: usize,
+    pub bg_width: usize,
+    // make it into Random(2.0, height_diff) later
+    pub height_diff: f64,
+    pub bg_alpha: RandomYaml,
+    pub bg_beta: RandomYaml,
+    pub font_alpha: RandomYaml,
+    pub reverse_prob: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "UPPERCASE")]
+struct ConfigYaml {
+    font: FontYaml,
+    cv: CvYaml,
+    merge: MergeYaml,
+}
+
+impl<P1: AsRef<Path> + Clone> GeneratorConfig<P1> {
+    pub fn from_yaml(path: P1) -> GeneratorConfig<String> {
+        let yaml_str = fs::read_to_string(path).expect("the config file does not exist");
+        let yaml: ConfigYaml = serde_yaml::from_str(&yaml_str).expect("fail to parse config file");
+
+        GeneratorConfig {
+            font_size: yaml.font.font_size,
+            line_height: yaml.font.line_height,
+            font_img_width: yaml.font.font_img_width,
+            font_img_height: yaml.font.font_img_height,
+            box_prob: yaml.cv.box_prob,
+            perspective_prob: yaml.cv.perspective_prob,
+            perspective_x: yaml.cv.perspective_x.to_random(),
+            perspective_y: yaml.cv.perspective_y.to_random(),
+            perspective_z: yaml.cv.perspective_z.to_random(),
+            blur_prob: yaml.cv.blur_prob,
+            blur_sigma: yaml.cv.blur_sigma.to_random(),
+            filter_prob: yaml.cv.filter_prob,
+            emboss_prob: yaml.cv.emboss_prob,
+            sharp_prob: yaml.cv.sharp_prob,
+            bg_dir: yaml.merge.bg_dir,
+            bg_height: yaml.merge.bg_height,
+            bg_width: yaml.merge.bg_width,
+            height_diff: Random::new_uniform(2.0, yaml.merge.height_diff),
+            bg_alpha: yaml.merge.bg_alpha.to_random(),
+            bg_beta: yaml.merge.bg_beta.to_random(),
+            font_alpha: yaml.merge.font_alpha.to_random(),
+            reverse_prob: yaml.merge.reverse_prob,
         }
     }
 }
@@ -173,6 +266,7 @@ impl<P: AsRef<Path> + Clone> Generator<P> {
             bg_alpha: config.bg_alpha,
             bg_beta: config.bg_beta,
             font_alpha: config.font_alpha,
+            reverse_prob: config.reverse_prob,
         };
         let bg_factory = BgFactory::new(config.bg_dir.clone(), config.bg_height, config.bg_width);
 
@@ -302,11 +396,6 @@ impl<P: AsRef<Path> + Clone> Generator<P> {
         std::mem::drop(font_system);
         std::mem::drop(editor);
         let img = self.gen_img(foreground_color, background_color);
-        // img.save(format!(
-        //     "./imgs/{}.png",
-        //     std::time::UNIX_EPOCH.elapsed().unwrap().as_secs_f64()
-        // ))
-        // .unwrap();
 
         img
     }
@@ -352,5 +441,13 @@ mod test {
 
         let res = generator.apply_effect(gray);
         res.save("./test-img/generator.png").unwrap();
+    }
+
+    #[test]
+    fn test_config() {
+        let res = GeneratorConfig::from_yaml("./synth_text/config.yaml");
+        println!("{:?}", res);
+        println!();
+        println!("{:?}", GeneratorConfig::default());
     }
 }

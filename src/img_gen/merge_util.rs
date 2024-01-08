@@ -112,6 +112,7 @@ pub struct MergeUtil {
     pub bg_alpha: Random,
     pub bg_beta: Random,
     pub font_alpha: Random,
+    pub reverse_prob: f64,
 }
 
 impl MergeUtil {
@@ -186,13 +187,22 @@ impl MergeUtil {
             (0, 0),
             Gradient::Maximum,
         );
-        let (target, _) = poisson_processor.step(1000);
-        let final_img = GrayImage::from_vec(
+        let (target, _) = poisson_processor.step(500);
+        let mut final_img = GrayImage::from_vec(
             target.ncols() as u32,
             target.nrows() as u32,
             target.transpose().iter().map(|&each| each).collect(),
         )
         .unwrap();
+
+        if rand::thread_rng().gen_range(0.0..=1.0) < 0.5 {
+            final_img = GrayImage::from_vec(
+                final_img.width(),
+                final_img.height(),
+                final_img.to_vec().iter().map(|each| 255 - each).collect(),
+            )
+            .unwrap()
+        }
 
         final_img
     }
@@ -214,6 +224,7 @@ mod test {
             bg_alpha: Random::new_gaussian(0.5, 1.5),
             bg_beta: Random::new_gaussian(-50.0, 50.0),
             font_alpha: Random::new_uniform(0.2, 1.0),
+            reverse_prob: 0.5,
         };
 
         let start = Instant::now();
@@ -233,6 +244,7 @@ mod test {
             bg_alpha: Random::new_gaussian(0.5, 1.5),
             bg_beta: Random::new_gaussian(-50.0, 50.0),
             font_alpha: Random::new_uniform(0.2, 1.0),
+            reverse_prob: 0.5,
         };
 
         let start = Instant::now();
@@ -252,6 +264,7 @@ mod test {
             bg_alpha: Random::new_gaussian(0.5, 1.5),
             bg_beta: Random::new_gaussian(-50.0, 50.0),
             font_alpha: Random::new_uniform(0.2, 1.0),
+            reverse_prob: 0.5,
         };
         let bg_factory = BgFactory::new("synth_text/background", 64, 1000);
 

@@ -3,6 +3,7 @@ use core::ops::{AddAssign, Div, Neg, Sub};
 use image::GrayImage;
 use nalgebra::DMatrix;
 
+/// The main reference here is the Numba-based Solver implementation
 pub struct Solver {
     mask: DMatrix<f64>,
     mask_not: DMatrix<f64>,
@@ -108,6 +109,7 @@ macro_rules! mix_grad {
     };
 }
 
+/// This is a port of the project [Fast-Poisson-Image-Editing](https://github.com/Trinkle23897/Fast-Poisson-Image-Editing)
 pub struct Processor {
     // gradient: Gradient,
     solver: Solver,
