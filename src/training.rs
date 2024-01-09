@@ -1,7 +1,6 @@
-use std::{fs, time::Instant};
+use std::{fs, path::Path, time::Instant};
 
 use burn::{
-    config::Config,
     data::dataloader::DataLoaderBuilder,
     module::{AutodiffModule, Module},
     nn::loss::Reduction,
@@ -9,6 +8,7 @@ use burn::{
     record::{BinFileRecorder, FullPrecisionSettings},
     tensor::{backend::AutodiffBackend, Int, Tensor},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     burn_ext::ctc::CTCLoss,
@@ -18,69 +18,78 @@ use crate::{
     model::CRNNConfig,
 };
 
-#[derive(Config)]
-pub struct CRNNTrainingConfig {
-    #[config(default = 35)]
-    pub batch_size: usize,
-    #[config(default = 8)]
-    pub num_workers: usize,
-    #[config(default = 3407)]
-    pub seed: u64,
-    #[config(default = 0.01)]
-    pub lr: f64,
-    pub model: CRNNConfig,
-    pub optimizer: AdamConfig,
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CrnnTrainingConfig {
+    crnn_num_classes: usize,
+    crnn_rnn_hidden_size: usize,
+    pretrained_model_path: String,
+    lexicon_path: String,
+    batch_size: usize,
+    num_workers: usize,
+    random_seed: u64,
+    learning_rate: f64,
+    generator_config_path: String,
+    save_interval: usize,
+    save_dir: String,
 }
 
-pub fn run<B: AutodiffBackend>(device: B::Device) {
+impl CrnnTrainingConfig {
+    pub fn from_yaml<P: AsRef<Path>>(path: P) -> Self {
+        let path = fs::read_to_string(path).expect("training config does not exist");
+        let yaml: CrnnTrainingConfig =
+            serde_yaml::from_str(&path).expect("fail to read training config");
+
+        yaml
+    }
+}
+
+pub fn run<B: AutodiffBackend>(device: B::Device, config: &CrnnTrainingConfig) {
     let start = Instant::now();
     let bfr = BinFileRecorder::<FullPrecisionSettings>::new();
     // Create the configuration.
-    let config_model = CRNNConfig::new(1, 110001, 256);
+    let config_model = CRNNConfig::new(1, config.crnn_num_classes, config.crnn_rnn_hidden_size);
     let config_optimizer = AdamConfig::new();
-    let config = CRNNTrainingConfig::new(config_model, config_optimizer);
 
-    B::seed(config.seed);
+    B::seed(config.random_seed);
 
     // Create the model and optimizer.
-    let mut model = config.model.init(&device);
-    let mut optim = config.optimizer.init();
+    let mut model = config_model.init(&device);
+    let mut optim = config_optimizer.init();
 
-    // let mut model = model
-    //     .load_file("./iter-00000", &bfr)
-    //     .unwrap();
+    if config.pretrained_model_path.len() > 0 {
+        model = model
+            .load_file(&config.pretrained_model_path, &bfr)
+            .expect("fail to read pretrained model");
+        println!("{} loaded.", config.pretrained_model_path);
+    }
 
     // Create the batcher.
     let batcher_train = TextImgBatcher::<B>::new(device.clone());
     let batcher_valid = TextImgBatcher::<B::InnerBackend>::new(device.clone());
 
-    let generator_config = GeneratorConfig::from_yaml("./synth_text/config.yaml");
-    let lexicon = fs::read_to_string("./lexicon.txt").unwrap();
+    let generator_config = GeneratorConfig::from_yaml(&config.generator_config_path);
+    let lexicon = fs::read_to_string(&config.lexicon_path).unwrap();
     let converter = Converter::new(&lexicon);
 
     // Create the dataloaders.
     let dataloader_train = DataLoaderBuilder::new(batcher_train)
         .batch_size(config.batch_size)
-        .shuffle(config.seed)
+        .shuffle(config.random_seed)
         .num_workers(config.num_workers)
         .build(TextImgDataset::new(
             10..15,
             1000_0000,
-            "./font",
-            "./ch.txt",
             generator_config.clone(),
             converter.clone(),
         ));
 
     let dataloader_test = DataLoaderBuilder::new(batcher_valid)
         .batch_size(config.batch_size)
-        .shuffle(config.seed)
+        .shuffle(config.random_seed)
         .num_workers(config.num_workers)
         .build(TextImgDataset::new(
             10..15,
             5_0000,
-            "./font",
-            "./ch.txt",
             generator_config,
             converter.clone(),
         ));
@@ -117,12 +126,15 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
         // Gradients linked to each parameter of the model.
         let grads = GradientsParams::from_grads(grads, &model);
         // Update the model using the optimizer.
-        model = optim.step(config.lr, model, grads);
+        model = optim.step(config.learning_rate, model, grads);
 
-        if iteration % 1000 == 0 {
+        if iteration % config.save_interval == 0 {
             model
                 .clone()
-                .save_file(format!("./iter-{count:05}"), &bfr)
+                .save_file(
+                    Path::new(&config.save_dir).join(format!("iter-{count:05}")),
+                    &bfr,
+                )
                 .unwrap();
             count += 1;
         }

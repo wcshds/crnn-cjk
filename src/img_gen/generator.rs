@@ -25,11 +25,14 @@ use super::{
 
 #[derive(Copy, Clone, Debug)]
 pub struct GeneratorConfig<P: AsRef<Path> + Clone> {
+    // 1. font_util
+    pub font_dir: P,
+    pub chinese_ch_file_path: P,
     pub font_size: usize,
     pub line_height: usize,
     pub font_img_height: usize,
     pub font_img_width: usize,
-    // 1. cv_util
+    // 2. cv_util
     // draw box
     pub box_prob: f64,
     // perspective transform
@@ -44,7 +47,7 @@ pub struct GeneratorConfig<P: AsRef<Path> + Clone> {
     pub filter_prob: f64,
     pub emboss_prob: f64,
     pub sharp_prob: f64,
-    // 2. merge_util
+    // 3. merge_util
     pub bg_dir: P,
     pub bg_height: usize,
     pub bg_width: usize,
@@ -58,6 +61,8 @@ pub struct GeneratorConfig<P: AsRef<Path> + Clone> {
 impl Default for GeneratorConfig<String> {
     fn default() -> Self {
         GeneratorConfig {
+            font_dir: "./font".to_string(),
+            chinese_ch_file_path: "./ch.txt".to_string(),
             font_size: 50,
             line_height: 64,
             font_img_width: 2000,
@@ -86,6 +91,8 @@ impl Default for GeneratorConfig<String> {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct FontYaml {
+    pub font_dir: String,
+    pub chinese_ch_file_path: String,
     font_size: usize,
     line_height: usize,
     font_img_height: usize,
@@ -136,7 +143,7 @@ struct MergeYaml {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "UPPERCASE")]
-struct ConfigYaml {
+struct GeneratorConfigYaml {
     font: FontYaml,
     cv: CvYaml,
     merge: MergeYaml,
@@ -145,9 +152,11 @@ struct ConfigYaml {
 impl<P1: AsRef<Path> + Clone> GeneratorConfig<P1> {
     pub fn from_yaml(path: P1) -> GeneratorConfig<String> {
         let yaml_str = fs::read_to_string(path).expect("the config file does not exist");
-        let yaml: ConfigYaml = serde_yaml::from_str(&yaml_str).expect("fail to parse config file");
+        let yaml: GeneratorConfigYaml = serde_yaml::from_str(&yaml_str).expect("fail to parse config file");
 
         GeneratorConfig {
+            font_dir: yaml.font.font_dir,
+            chinese_ch_file_path: yaml.font.chinese_ch_file_path,
             font_size: yaml.font.font_size,
             line_height: yaml.font.line_height,
             font_img_width: yaml.font.font_img_width,
@@ -224,10 +233,10 @@ impl<P: AsRef<Path> + Clone> Clone for Generator<P> {
 
 // todo: image enhancement
 impl<P: AsRef<Path> + Clone> Generator<P> {
-    pub fn new(font_dir: &str, chinese_ch_file: &str, config: GeneratorConfig<P>) -> Self {
+    pub fn new(config: GeneratorConfig<P>) -> Self {
         let mut font_system = FontSystem::new();
         let db = font_system.db_mut();
-        db.load_fonts_dir(font_dir);
+        db.load_fonts_dir(config.font_dir.as_ref());
 
         // create one per application
         let swash_cache = SwashCache::new();
@@ -244,7 +253,8 @@ impl<P: AsRef<Path> + Clone> Generator<P> {
 
         let font_util = FontUtil::new(font_system);
 
-        let chinese_character_file_data = fs::read_to_string(chinese_ch_file).unwrap();
+        let chinese_character_file_data =
+            fs::read_to_string(config.chinese_ch_file_path.as_ref()).unwrap();
         let full_font_list = font_util.get_full_font_list();
         let (chinese_ch_dict, chinese_ch_weights) =
             init_ch_dict_and_weight(&font_util, &full_font_list, &chinese_character_file_data);
@@ -422,20 +432,16 @@ mod test {
 
     #[test]
     fn test_chinese_image_gen() {
-        let font_dir = "./font";
-        let chinese_ch_file = "./ch.txt";
         let config = GeneratorConfig::default();
-        let generator = Generator::new(font_dir, chinese_ch_file, config);
+        let generator = Generator::new(config);
         let img = generator.gen_image_from_cjk("今天天氣眞好", [255, 105, 105], [166, 208, 221]);
         img.save("test.png").unwrap();
     }
 
     #[test]
     fn test_effect() {
-        let font_dir = "./font";
-        let chinese_ch_file = "./ch.txt";
         let config = GeneratorConfig::default();
-        let generator = Generator::new(font_dir, chinese_ch_file, config);
+        let generator = Generator::new(config);
         let img = generator.gen_image_from_cjk("今天天氣眞好", [255, 255, 255], [0, 0, 0]);
         let gray = image::imageops::grayscale(&img);
 

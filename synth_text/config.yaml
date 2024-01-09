@@ -1,4 +1,6 @@
 FONT:
+  font_dir: './font'
+  chinese_ch_file_path: './ch.txt'
   font_size: 50
   line_height: 64
   font_img_width: 2000

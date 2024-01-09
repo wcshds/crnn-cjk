@@ -1,6 +1,7 @@
 use burn::backend::{libtorch::LibTorchDevice, Autodiff, LibTorch};
-use crnn::training::run;
+use crnn::training::{run, CrnnTrainingConfig};
 
 fn main() {
-    run::<Autodiff<LibTorch>>(LibTorchDevice::Cuda(0));
+    let config = CrnnTrainingConfig::from_yaml("./training_config.yaml");
+    run::<Autodiff<LibTorch>>(LibTorchDevice::Cuda(0), &config);
 }

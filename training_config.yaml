@@ -1,0 +1,11 @@
+crnn_num_classes: 110001
+crnn_rnn_hidden_size: 256
+pretrained_model_path: ""
+lexicon_path: "./lexicon.txt"
+batch_size: 35
+num_workers: 8
+random_seed: 3407
+learning_rate: 0.01
+generator_config_path: './synth_text/config.yaml'
+save_interval: 1000
+save_dir: "./"

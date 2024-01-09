@@ -99,12 +99,10 @@ impl TextImgDataset {
     pub fn new(
         num_char_range: Range<usize>,
         dataset_size: usize,
-        font_dir: &str,
-        chinese_ch_file: &str,
         config: GeneratorConfig<String>,
         converter: Converter,
     ) -> Self {
-        let generator = Generator::new(font_dir, chinese_ch_file, config);
+        let generator = Generator::new(config);
 
         Self {
             generator,
@@ -187,7 +185,7 @@ mod test {
 
     #[test]
     fn get_dataset_tensor() {
-        let generator_config = GeneratorConfig::default();
+        let generator_config = GeneratorConfig::from_yaml("./synth_text/config.yaml");
         let lexicon = fs::read_to_string("./lexicon.txt").unwrap();
         let converter = Converter::new(&lexicon);
 
@@ -199,8 +197,6 @@ mod test {
             .build(TextImgDataset::new(
                 10..15,
                 1000_0000,
-                "./font",
-                "./ch.txt",
                 generator_config,
                 converter.clone(),
             ));
