@@ -1,11 +1,11 @@
 crnn_num_classes: 110001
 crnn_rnn_hidden_size: 256
-pretrained_model_path: ""
+pretrained_model_path: "" # it seems that file name should not contain filename extension (.bin)
 lexicon_path: "./lexicon.txt"
-batch_size: 35
+batch_size: 30
 num_workers: 8
-random_seed: 3407
-learning_rate: 0.01
+random_seed: 3407 # 3407 is all you need!!! ...just a joke
+learning_rate: 0.001 # after some trying, I found that 0.01 too big and 0.001 works fine
 generator_config_path: './synth_text/config.yaml'
 save_interval: 1000
 save_dir: "./"

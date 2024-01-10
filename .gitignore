@@ -3,3 +3,6 @@
 /Cargo.lock
 /test-img
 /dataset-images-tensor.txt
+/trained
+/lexicon-tiny.txt
+/ch-tiny.txt
