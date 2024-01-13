@@ -4,7 +4,7 @@ use burn::{
     data::dataloader::DataLoaderBuilder,
     module::{AutodiffModule, Module},
     nn::loss::Reduction,
-    optim::{AdamConfig, GradientsParams, Optimizer},
+    optim::{decay::WeightDecayConfig, AdamConfig, GradientsParams, Optimizer},
     record::{BinFileRecorder, FullPrecisionSettings},
     tensor::{backend::AutodiffBackend, Int, Tensor},
 };
@@ -48,9 +48,13 @@ pub fn run<B: AutodiffBackend>(device: B::Device, config: &CrnnTrainingConfig) {
     let bfr = BinFileRecorder::<FullPrecisionSettings>::new();
     // Create the configuration.
     let config_model = CRNNConfig::new(1, config.crnn_num_classes, config.crnn_rnn_hidden_size);
-    let config_optimizer = AdamConfig::new();
+    let config_optimizer = AdamConfig::new()
+        .with_epsilon(1e-8)
+        .with_weight_decay(Some(WeightDecayConfig::new(0.0)));
 
-    B::seed(config.random_seed);
+    if config.random_seed != 0 {
+        B::seed(config.random_seed);
+    }
 
     // Create the model and optimizer.
     let mut model = config_model.init(&device);

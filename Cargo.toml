@@ -7,11 +7,18 @@ edition = "2021"
 
 [dependencies]
 # burn = { version = "0.10.0", features=["train", "wgpu"]}
-burn = { git = "https://github.com/tracel-ai/burn.git", features = [
+# burn = { git = "https://github.com/tracel-ai/burn.git", features = [
+#     "train",
+#     "wgpu",
+#     "ndarray",
+#     "tch",
+# ] }
+burn = { git = "https://github.com/wcshds/burn.git", branch = "sigmoid-backward", features = [
     "train",
     "wgpu",
     "ndarray",
     "tch",
+    "candle",
 ] }
 conv = "0.3.3"
 cosmic-text = "0.10.0"

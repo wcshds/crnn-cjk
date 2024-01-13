@@ -103,10 +103,11 @@ impl<B: Backend> CRNN<B> {
         let conv = self.batchnorm3.forward(conv);
         let conv = self.relu.forward(conv);
         let conv = self.pooling5.forward(conv);
+        // [batch_size, channels, 1, seq_length(image width)]
         let conv = self.conv6.forward(conv);
 
         let conv = conv.squeeze::<3>(2);
-        // [batch_size, seq_length, channels]
+        // [batch_size, seq_length(image width), channels]
         let conv = conv.swap_dims(1, 2);
 
         let features = self.rnn0.forward(conv);
