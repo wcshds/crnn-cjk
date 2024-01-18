@@ -8,46 +8,21 @@ use burn::{
     record::{BinFileRecorder, FullPrecisionSettings},
     tensor::{backend::AutodiffBackend, Int, Tensor},
 };
-use serde::{Deserialize, Serialize};
 
 use crate::{
     burn_ext::ctc::CTCLoss,
     converter::Converter,
     dataset::{TextImgBatcher, TextImgDataset},
-    img_gen::generator::GeneratorConfig,
+    img_gen::parse_config::GeneratorConfig,
     model::CRNNConfig,
+    parse_config::CrnnTrainingConfig,
 };
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct CrnnTrainingConfig {
-    crnn_num_classes: usize,
-    crnn_rnn_hidden_size: usize,
-    pretrained_model_path: String,
-    lexicon_path: String,
-    batch_size: usize,
-    num_workers: usize,
-    random_seed: u64,
-    learning_rate: f64,
-    generator_config_path: String,
-    save_interval: usize,
-    save_dir: String,
-}
-
-impl CrnnTrainingConfig {
-    pub fn from_yaml<P: AsRef<Path>>(path: P) -> Self {
-        let path = fs::read_to_string(path).expect("training config does not exist");
-        let yaml: CrnnTrainingConfig =
-            serde_yaml::from_str(&path).expect("fail to read training config");
-
-        yaml
-    }
-}
 
 pub fn run<B: AutodiffBackend>(device: B::Device, config: &CrnnTrainingConfig) {
     let start = Instant::now();
     let bfr = BinFileRecorder::<FullPrecisionSettings>::new();
     // Create the configuration.
-    let config_model = CRNNConfig::new(1, config.crnn_num_classes, config.crnn_rnn_hidden_size);
+    let config_model = CRNNConfig::new(config.crnn_num_classes, config.crnn_rnn_hidden_size);
     let config_optimizer = AdamConfig::new()
         .with_epsilon(1e-8)
         .with_weight_decay(Some(WeightDecayConfig::new(0.0)));
@@ -57,7 +32,7 @@ pub fn run<B: AutodiffBackend>(device: B::Device, config: &CrnnTrainingConfig) {
     }
 
     // Create the model and optimizer.
-    let mut model = config_model.init(&device);
+    let mut model = config_model.init(&config.cnn_structure, &device);
     let mut optim = config_optimizer.init();
 
     if config.pretrained_model_path.len() > 0 {
@@ -107,7 +82,7 @@ pub fn run<B: AutodiffBackend>(device: B::Device, config: &CrnnTrainingConfig) {
     // Iterate over our training and validation loop for X epochs.
     // Implement our training loop.
     for (iteration, batch) in dataloader_train.iter().enumerate() {
-        let output = model.forward(batch.images);
+        let output = model.forward(batch.images, &config.cnn_structure);
         let device = output.clone().device();
         let [batch_size, seq_length, _] = output.clone().dims();
         let input_lengths = Tensor::<B, 1, Int>::full([batch_size], seq_length as i32, &device);
@@ -149,7 +124,7 @@ pub fn run<B: AutodiffBackend>(device: B::Device, config: &CrnnTrainingConfig) {
 
     // Implement our validation loop.
     for (iteration, batch) in dataloader_test.iter().enumerate() {
-        let output = model_valid.forward(batch.images);
+        let output = model_valid.forward(batch.images, &config.cnn_structure);
         let [batch_size, seq_length, _] = output.dims();
         let input_lengths =
             Tensor::<B::InnerBackend, 1, Int>::full([batch_size], seq_length as i32, &device);

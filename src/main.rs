@@ -1,5 +1,5 @@
 use burn::backend::{libtorch::LibTorchDevice, Autodiff, LibTorch};
-use crnn::training::{run, CrnnTrainingConfig};
+use crnn::{parse_config::CrnnTrainingConfig, training::run};
 
 fn main() {
     let config = CrnnTrainingConfig::from_yaml("./training_config.yaml");

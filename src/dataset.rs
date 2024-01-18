@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     converter::Converter,
-    img_gen::generator::{Generator, GeneratorConfig},
+    img_gen::{generator::Generator, parse_config::GeneratorConfig},
 };
 
 pub struct TextImgBatcher<B: Backend> {

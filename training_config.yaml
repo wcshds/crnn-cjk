@@ -1,11 +1,38 @@
-crnn_num_classes: 110001
-crnn_rnn_hidden_size: 256
-pretrained_model_path: "" # it seems that file name should not contain filename extension (.bin)
-lexicon_path: "./lexicon.txt"
-batch_size: 30
-num_workers: 8
-random_seed: 3407 # if random_seed is 0, use default seed
-learning_rate: 0.001
-generator_config_path: "./synth_text/config.yaml"
-save_interval: 1000
-save_dir: "./"
+MODEL:
+  crnn_num_classes: 110001
+  crnn_rnn_hidden_size: 256
+  cnn_structure:
+    - !Conv [[1, 64], [3, 3], [1, 1], [1, 1]] # channels, kernel_size, strides, paddings
+    - !Relu
+    - !Pooling [[2, 2], [2, 2], [1, 1]] # kernel_size, strides, paddings
+    - !Conv [[64, 128], [3, 3], [1, 1], [1, 1]] # channels, kernel_size, strides, paddings
+    - !Relu
+    - !Pooling [[2, 2], [2, 2], [1, 1]] # kernel_size, strides, paddings
+    - !Conv [[128, 256], [3, 3], [1, 1], [1, 1]] # channels, kernel_size, strides, paddings
+    - !Batchnorm 256 # num_features
+    - !Relu
+    - !Pooling [[2, 1], [2, 1], [1, 0]] # kernel_size, strides, paddings
+    - !Conv [[256, 512], [3, 3], [1, 1], [1, 1]] # channels, kernel_size, strides, paddings
+    - !Batchnorm 512 # num_features
+    - !Relu
+    - !Pooling [[2, 1], [2, 1], [1, 0]] # kernel_size, strides, paddings
+    - !Conv [[512, 512], [3, 3], [1, 1], [1, 1]] # channels, kernel_size, strides, paddings
+    - !Batchnorm 512 # num_features
+    - !Relu
+    - !Pooling [[2, 1], [2, 1], [1, 0]] # kernel_size, strides, paddings
+    - !Conv [[512, 512], [3, 3], [1, 1], [1, 1]] # channels, kernel_size, strides, paddings
+    - !Batchnorm 512 # num_features
+    - !Relu
+    - !Pooling [[2, 1], [2, 1], [1, 0]] # kernel_size, strides, paddings
+    - !Conv [[512, 512], [2, 2], [1, 1], [0, 0]] # channels, kernel_size, strides, paddings
+
+TRAINING:
+  pretrained_model_path: "" # it seems that file name should not contain filename extension (.bin)
+  lexicon_path: "./lexicon.txt"
+  batch_size: 30
+  num_workers: 8
+  random_seed: 3407 # if random_seed is 0, use default seed
+  learning_rate: 0.001
+  generator_config_path: "./synth_text/config.yaml"
+  save_interval: 1000
+  save_dir: "./"

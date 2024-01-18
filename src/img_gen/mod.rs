@@ -5,6 +5,7 @@ mod font_util;
 pub mod generator;
 mod init;
 pub mod merge_util;
+pub mod parse_config;
 
 #[cfg(test)]
 mod test {
