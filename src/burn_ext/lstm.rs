@@ -98,24 +98,26 @@ impl<B: Backend> Lstm<B> {
         let [batch_size, seq_length, _] = batched_input.dims();
 
         self.forward_iter(
-            batched_input.iter_dim(1),
+            batched_input.iter_dim(1).zip(0..seq_length),
             state,
             batch_size,
             seq_length,
-            false,
             &device,
         )
     }
 
-    fn forward_iter<I: Iterator<Item = Tensor<B, 3>>>(
+    fn forward_iter<I: Iterator<Item = (Tensor<B, 3>, usize)>>(
         &self,
         input_timestep_iter: I,
         state: Option<(Tensor<B, 2>, Tensor<B, 2>)>,
         batch_size: usize,
         seq_length: usize,
-        reverse: bool,
         device: &B::Device,
     ) -> (Tensor<B, 3>, Tensor<B, 3>) {
+        let mut batched_cell_state = Tensor::zeros([batch_size, seq_length, self.d_hidden], device);
+        let mut batched_hidden_state =
+            Tensor::zeros([batch_size, seq_length, self.d_hidden], device);
+
         let (mut cell_state, mut hidden_state) = match state {
             Some((cell_state, hidden_state)) => (cell_state, hidden_state),
             None => (
@@ -124,10 +126,7 @@ impl<B: Backend> Lstm<B> {
             ),
         };
 
-        let mut batched_cell_state_vec = Vec::with_capacity(seq_length);
-        let mut batched_hidden_state_vec = Vec::with_capacity(seq_length);
-
-        for input_t in input_timestep_iter {
+        for (input_t, t) in input_timestep_iter {
             let input_t = input_t.squeeze(1);
             // f(orget)g(ate) tensors
             let biased_fg_input_sum = self
@@ -156,23 +155,26 @@ impl<B: Backend> Lstm<B> {
             cell_state = forget_values * cell_state.clone() + add_values * candidate_cell_values;
             hidden_state = output_values * cell_state.clone().tanh();
 
-            let unsqueezed_cell_state = cell_state.clone().unsqueeze_dim(1);
-            let unsqueezed_hidden_state = hidden_state.clone().unsqueeze_dim(1);
+            let unsqueezed_shape = [cell_state.shape().dims[0], 1, cell_state.shape().dims[1]];
+
+            let unsqueezed_cell_state = cell_state.clone().reshape(unsqueezed_shape);
+            let unsqueezed_hidden_state = hidden_state.clone().reshape(unsqueezed_shape);
 
             // store the state for this timestep
-            batched_cell_state_vec.push(unsqueezed_cell_state);
-            batched_hidden_state_vec.push(unsqueezed_hidden_state);
+            batched_cell_state = batched_cell_state.slice_assign(
+                [0..batch_size, t..(t + 1), 0..self.d_hidden],
+                unsqueezed_cell_state.clone(),
+            );
+            batched_hidden_state = batched_hidden_state.slice_assign(
+                [0..batch_size, t..(t + 1), 0..self.d_hidden],
+                unsqueezed_hidden_state.clone(),
+            );
         }
 
-        if reverse {
-            batched_cell_state_vec = batched_cell_state_vec.into_iter().rev().collect();
-            batched_hidden_state_vec = batched_hidden_state_vec.into_iter().rev().collect();
-        }
-
-        let batched_cell_state = Tensor::cat(batched_cell_state_vec, 1);
-        let batched_hidden_state = Tensor::cat(batched_hidden_state_vec, 1);
-
-        (batched_cell_state, batched_hidden_state)
+        (
+            batched_cell_state.clone(),
+            batched_hidden_state + batched_cell_state.clone() - batched_cell_state.clone(),
+        )
     }
 }
 
@@ -276,11 +278,10 @@ impl<B: Backend> BiLstm<B> {
 
         // reverse direction
         let (batched_cell_state_reverse, batched_hidden_state_reverse) = self.reverse.forward_iter(
-            batched_input.iter_dim(1).rev(),
+            batched_input.iter_dim(1).rev().zip((0..seq_length).rev()),
             Some((cell_state_reverse, hidden_state_reverse)),
             batch_size,
             seq_length,
-            true,
             &device,
         );
 
@@ -351,17 +352,24 @@ mod tests {
             initializer: Initializer,
             device: &<TestBackend as Backend>::Device,
         ) -> GateController<TestBackend> {
-            let record = LinearRecord {
-                weight: Param::from(Tensor::from_data(Data::from([[weights]]), device)),
-                bias: Some(Param::from(Tensor::from_data(Data::from([biases]), device))),
-            };
+            // let record = LinearRecord {
+            //     weight: Param::from(Tensor::from_data(Data::from([[weights]]), device)),
+            //     bias: Some(Param::from(Tensor::from_data(Data::from([biases]), device))),
+            // };
+
             GateController::create_with_weights(
                 d_input,
                 d_output,
                 bias,
                 initializer,
-                record.clone(),
-                record,
+                LinearRecord {
+                    weight: Param::from(Tensor::from_data(Data::from([[weights]]), device)),
+                    bias: Some(Param::from(Tensor::from_data(Data::from([biases]), device))),
+                },
+                LinearRecord {
+                    weight: Param::from(Tensor::from_data(Data::from([[weights]]), device)),
+                    bias: Some(Param::from(Tensor::from_data(Data::from([biases]), device))),
+                },
             )
         }
 
