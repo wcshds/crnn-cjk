@@ -1,4 +1,3 @@
-/// this ctc loss implementation which uses burn's default autodiff cannot work.
 #![allow(clippy::single_range_in_vec_init)]
 use core::marker::PhantomData;
 
@@ -11,6 +10,7 @@ const NEG_INF: f32 = -1e5;
 // a small value used to prevent the occurrence of log(0)
 const EPSILON: f32 = f32::EPSILON;
 
+/// this ctc loss implementation which uses burn's default autodiff cannot work.
 /// The Connectionist Temporal Classification loss.
 #[derive(Clone, Debug)]
 pub struct CTCLoss<B: Backend> {

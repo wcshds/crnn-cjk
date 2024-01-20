@@ -127,7 +127,7 @@ impl<B: Backend> CTCLoss<B> {
 mod test {
 
     use burn::{
-        backend::{Autodiff, Candle, LibTorch, NdArray, Wgpu},
+        backend::{Autodiff, LibTorch, NdArray, Wgpu},
         tensor::Data,
     };
 

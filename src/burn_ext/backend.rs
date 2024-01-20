@@ -6,7 +6,7 @@ use burn::{
         },
         libtorch::{TchElement, TchTensor},
         ndarray::FloatNdArrayElement,
-        Autodiff, Candle, LibTorch, NdArray, Wgpu,
+        Autodiff, LibTorch, NdArray, Wgpu,
     },
     nn::loss::Reduction,
     tensor::{
@@ -738,7 +738,7 @@ impl<E: FloatNdArrayElement> Backend for NdArray<E> {}
 
 impl Backend for Wgpu {}
 
-impl Backend for Candle {}
+// impl Backend for Candle {}
 
 impl<E: TchElement> Backend for LibTorch<E> {
     fn ctc_loss_internal_with_alphas_targetspad(

@@ -10,7 +10,7 @@ use burn::{
 };
 
 use crate::{
-    burn_ext::ctc::CTCLoss,
+    burn_ext::{self, ctc::CTCLoss},
     converter::Converter,
     dataset::{TextImgBatcher, TextImgDataset},
     img_gen::parse_config::GeneratorConfig,
@@ -18,7 +18,10 @@ use crate::{
     parse_config::CrnnTrainingConfig,
 };
 
-pub fn run<B: AutodiffBackend>(device: B::Device, config: &CrnnTrainingConfig) {
+pub fn run<B: AutodiffBackend + burn_ext::backend::Backend>(
+    device: B::Device,
+    config: &CrnnTrainingConfig,
+) {
     let start = Instant::now();
     let bfr = BinFileRecorder::<FullPrecisionSettings>::new();
     // Create the configuration.
@@ -119,29 +122,29 @@ pub fn run<B: AutodiffBackend>(device: B::Device, config: &CrnnTrainingConfig) {
         }
     }
 
-    // Get the model without autodiff.
-    let model_valid = model.valid();
+    // // Get the model without autodiff.
+    // let model_valid = model.valid();
 
-    // Implement our validation loop.
-    for (iteration, batch) in dataloader_test.iter().enumerate() {
-        let output = model_valid.forward(batch.images, &config.cnn_structure);
-        let [batch_size, seq_length, _] = output.dims();
-        let input_lengths =
-            Tensor::<B::InnerBackend, 1, Int>::full([batch_size], seq_length as i32, &device);
-        let loss = CTCLoss::new(0).forward(
-            output.clone(),
-            batch.targets.clone(),
-            input_lengths.clone(),
-            batch.target_lengths.clone(),
-            Some(Reduction::Mean),
-        );
-        // let accuracy = accuracy(output, batch.targets);
+    // // Implement our validation loop.
+    // for (iteration, batch) in dataloader_test.iter().enumerate() {
+    //     let output = model_valid.forward(batch.images, &config.cnn_structure);
+    //     let [batch_size, seq_length, _] = output.dims();
+    //     let input_lengths =
+    //         Tensor::<B::InnerBackend, 1, Int>::full([batch_size], seq_length as i32, &device);
+    //     let loss = CTCLoss::new(0).forward(
+    //         output.clone(),
+    //         batch.targets.clone(),
+    //         input_lengths.clone(),
+    //         batch.target_lengths.clone(),
+    //         Some(Reduction::Mean),
+    //     );
+    //     // let accuracy = accuracy(output, batch.targets);
 
-        println!(
-            "[Valid - Iteration {}] Loss {}",
-            iteration,
-            loss.clone().into_scalar(),
-            // accuracy,
-        );
-    }
+    //     println!(
+    //         "[Valid - Iteration {}] Loss {}",
+    //         iteration,
+    //         loss.clone().into_scalar(),
+    //         // accuracy,
+    //     );
+    // }
 }
