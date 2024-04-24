@@ -2,7 +2,7 @@ use std::{fs, path::Path, time::Instant};
 
 use burn::{
     data::dataloader::DataLoaderBuilder,
-    module::{AutodiffModule, Module},
+    module::Module,
     nn::loss::Reduction,
     optim::{decay::WeightDecayConfig, AdamConfig, GradientsParams, Optimizer},
     record::{BinFileRecorder, FullPrecisionSettings},
@@ -40,7 +40,7 @@ pub fn run<B: AutodiffBackend + burn_ext::backend::Backend>(
 
     if config.pretrained_model_path.len() > 0 {
         model = model
-            .load_file(&config.pretrained_model_path, &bfr)
+            .load_file(&config.pretrained_model_path, &bfr, &device)
             .expect("fail to read pretrained model");
         println!("{} loaded.", config.pretrained_model_path);
     }

@@ -367,7 +367,7 @@ fn one_hot<B: Backend>(tensor: Tensor<B, 2, Int>, num_classes: usize) -> Tensor<
     let shape = tensor.dims();
 
     let labels: Tensor<B, 3, Int> = tensor.unsqueeze_dim(2).repeat(2, num_classes);
-    let indices = Tensor::<B, 1, Int>::arange(0..num_classes, &device)
+    let indices = Tensor::<B, 1, Int>::arange(0..(num_classes as i64), &device)
         .reshape([1, 1, num_classes])
         .repeat(1, shape[1])
         .repeat(0, shape[0]);

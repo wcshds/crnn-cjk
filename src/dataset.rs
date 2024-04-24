@@ -18,6 +18,7 @@ use crate::{
     img_gen::{generator::Generator, parse_config::GeneratorConfig},
 };
 
+#[derive(Clone)]
 pub struct TextImgBatcher<B: Backend> {
     device: B::Device,
 }

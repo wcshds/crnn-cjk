@@ -1,8 +1,10 @@
 use burn::{
     backend::{
         autodiff::{
+            checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
             grads::Gradients,
             ops::{unary, Backward, Ops, OpsKind},
+            NodeID,
         },
         libtorch::{TchElement, TchTensor},
         ndarray::FloatNdArrayElement,
@@ -10,8 +12,8 @@ use burn::{
     },
     nn::loss::Reduction,
     tensor::{
-        ops::{FloatTensor, IntTensor, IntTensorOps, TensorOps},
-        ElementConversion, Shape,
+        ops::{FloatTensor, FloatTensorOps, IntTensor, IntTensorOps},
+        Device, ElementConversion, Shape,
     },
 };
 
@@ -20,11 +22,11 @@ const NEG_INF: f32 = -1e5;
 const EPSILON: f32 = 1e-8;
 
 fn unsqueeze_dim<const D1: usize, const D2: usize, B: burn::tensor::backend::Backend>(
-    tensor: B::TensorPrimitive<D1>,
+    tensor: B::FloatTensorPrimitive<D1>,
     dim: usize,
-) -> B::TensorPrimitive<D2> {
+) -> B::FloatTensorPrimitive<D2> {
     let mut dims = [1; D2];
-    let shape = B::shape(&tensor);
+    let shape = B::float_shape(&tensor);
 
     dims[0..dim].copy_from_slice(&shape.dims[0..dim]);
 
@@ -36,28 +38,28 @@ fn unsqueeze_dim<const D1: usize, const D2: usize, B: burn::tensor::backend::Bac
     }
 
     let shape = Shape::from(dims);
-    B::reshape(tensor, shape)
+    B::float_reshape(tensor, shape)
 }
 
 fn stack<const D1: usize, const D2: usize, B: burn::tensor::backend::Backend>(
-    tensors: Vec<B::TensorPrimitive<D1>>,
+    tensors: Vec<B::FloatTensorPrimitive<D1>>,
     dim: usize,
-) -> B::TensorPrimitive<D2> {
+) -> B::FloatTensorPrimitive<D2> {
     let tensors = tensors
         .into_iter()
         .map(|t| unsqueeze_dim::<D1, D2, B>(t, dim))
         .collect();
 
-    B::cat(tensors, dim)
+    B::float_cat(tensors, dim)
 }
 
 fn pad<const D: usize, B: burn::tensor::backend::Backend>(
-    tensor: B::TensorPrimitive<D>,
+    tensor: B::FloatTensorPrimitive<D>,
     pad_width: [(usize, usize); D],
     fill_value: B::FloatElem,
-) -> B::TensorPrimitive<D> {
-    let device = B::device(&tensor);
-    let origin_shape = B::shape(&tensor).dims;
+) -> B::FloatTensorPrimitive<D> {
+    let device = B::float_device(&tensor);
+    let origin_shape = B::float_shape(&tensor).dims;
 
     let mut pad_shape = [0; D];
     let mut assign_range = Vec::with_capacity(D);
@@ -68,15 +70,15 @@ fn pad<const D: usize, B: burn::tensor::backend::Backend>(
         assign_range.push(left_pad..(left_pad + origin_len));
     }
 
-    let padded = B::full(Shape::from(pad_shape), fill_value, &device);
+    let padded = B::float_full(Shape::from(pad_shape), fill_value, &device);
 
-    B::slice_assign::<D, D>(padded, assign_range.try_into().unwrap(), tensor)
+    B::float_slice_assign::<D, D>(padded, assign_range.try_into().unwrap(), tensor)
 }
 
 fn one_hot<B: burn::tensor::backend::Backend>(
     tensor: B::IntTensorPrimitive<2>,
     num_classes: usize,
-) -> B::TensorPrimitive<3> {
+) -> B::FloatTensorPrimitive<3> {
     let device = B::int_device(&tensor);
     let [dim0, dim1] = B::int_shape(&tensor).dims;
 
@@ -88,7 +90,7 @@ fn one_hot<B: burn::tensor::backend::Backend>(
     let indices = B::int_repeat(
         B::int_repeat(
             B::int_reshape(
-                B::arange(0..num_classes, &device),
+                B::int_arange(0..(num_classes as i64), &device),
                 Shape::from([1, 1, num_classes]),
             ),
             1,
@@ -106,7 +108,7 @@ fn pad_target<B: burn::tensor::backend::Backend>(
     target_lengths: B::IntTensorPrimitive<1>,
     max_target_length: usize,
     blank: usize,
-    device: &B::Device,
+    device: &Device<B>,
 ) -> B::IntTensorPrimitive<2> {
     let [batch_size] = B::int_shape(&target_lengths).dims;
 
@@ -142,11 +144,11 @@ pub trait Backend: burn::tensor::backend::Backend {
         reduction: Option<Reduction>,
     ) -> FloatTensor<Self, 1> {
         match reduction {
-            Some(Reduction::Mean) | Some(Reduction::Auto) => Self::mean(Self::div(
+            Some(Reduction::Mean) | Some(Reduction::Auto) => Self::float_mean(Self::float_div(
                 neg_log_likelihood,
                 Self::int_into_float(target_lengths),
             )),
-            Some(Reduction::Sum) => Self::sum(neg_log_likelihood),
+            Some(Reduction::Sum) => Self::float_sum(neg_log_likelihood),
             None => neg_log_likelihood,
         }
     }
@@ -171,12 +173,12 @@ pub trait Backend: burn::tensor::backend::Backend {
     }
 
     fn ctc_loss_internal(
-        log_probs: Self::TensorPrimitive<3>,
+        log_probs: Self::FloatTensorPrimitive<3>,
         targets: Self::IntTensorPrimitive<1>,
         input_lengths: Self::IntTensorPrimitive<1>,
         target_lengths: Self::IntTensorPrimitive<1>,
         blank: usize,
-    ) -> Self::TensorPrimitive<1> {
+    ) -> Self::FloatTensorPrimitive<1> {
         let (neg_log_likelihood, _, _) = Self::ctc_loss_internal_with_alphas_targetspad(
             log_probs,
             targets,
@@ -189,22 +191,22 @@ pub trait Backend: burn::tensor::backend::Backend {
     }
 
     fn ctc_loss_internal_with_alphas_targetspad(
-        log_probs: Self::TensorPrimitive<3>,
+        log_probs: Self::FloatTensorPrimitive<3>,
         targets: Self::IntTensorPrimitive<1>,
         input_lengths: Self::IntTensorPrimitive<1>,
         target_lengths: Self::IntTensorPrimitive<1>,
         blank: usize,
     ) -> (
-        Self::TensorPrimitive<1>,
-        Self::TensorPrimitive<3>,
+        Self::FloatTensorPrimitive<1>,
+        Self::FloatTensorPrimitive<3>,
         Self::IntTensorPrimitive<2>,
     ) {
         // make sure tensors are on the same device
-        let device = Self::device(&log_probs);
+        let device = Self::float_device(&log_probs);
         let input_lengths = Self::int_to_device(input_lengths, &device);
         let target_lengths = Self::int_to_device(target_lengths, &device);
 
-        let [batch_size, seq_length, num_classes] = Self::shape(&log_probs).dims;
+        let [batch_size, seq_length, num_classes] = Self::float_shape(&log_probs).dims;
         let max_target_length = Self::int_into_data(Self::int_max(target_lengths.clone()))
             .read()
             .value[0]
@@ -220,68 +222,71 @@ pub trait Backend: burn::tensor::backend::Backend {
         );
         let targets_one_hot = one_hot::<Self>(targets_pad.clone(), num_classes);
 
-        let log_alphas = Self::empty::<3>(
+        let log_alphas = Self::float_empty::<3>(
             Shape::from([batch_size, seq_length, target_with_blank_length]),
             &device,
         );
         // initialize value at t0
-        let log_alphas = Self::slice_assign(
+        let log_alphas = Self::float_slice_assign(
             log_alphas,
             [0..batch_size, 0..1, 0..target_with_blank_length],
-            Self::full(
+            Self::float_full(
                 Shape::from([batch_size, 1, target_with_blank_length]),
                 NEG_INF.elem(),
                 &device,
             ),
         );
-        let log_alphas = Self::slice_assign(
+        let log_alphas = Self::float_slice_assign(
             log_alphas,
             [0..batch_size, 0..1, 0..1],
-            Self::slice(log_probs.clone(), [0..batch_size, 0..1, blank..(blank + 1)]),
+            Self::float_slice(log_probs.clone(), [0..batch_size, 0..1, blank..(blank + 1)]),
         );
         let target_primes = Self::int_reshape(
             Self::int_slice(targets_pad.clone(), [0..batch_size, 0..1]),
             Shape::from([batch_size, 1, 1]),
         );
-        let mut log_alphas = Self::slice_assign(
+        let mut log_alphas = Self::float_slice_assign(
             log_alphas,
             [0..batch_size, 0..1, 1..2],
-            Self::gather(
+            Self::float_gather(
                 2,
-                Self::slice(log_probs.clone(), [0..batch_size, 0..1, 0..num_classes]),
+                Self::float_slice(log_probs.clone(), [0..batch_size, 0..1, 0..num_classes]),
                 target_primes,
             ),
         );
 
         // Shape: [batch_size, seq_length, max_target_length]
-        let log_probs_letter_available = Self::swap_dims(
-            Self::matmul(targets_one_hot, Self::swap_dims(log_probs.clone(), 1, 2)),
+        let log_probs_letter_available = Self::float_swap_dims(
+            Self::float_matmul(
+                targets_one_hot,
+                Self::float_swap_dims(log_probs.clone(), 1, 2),
+            ),
             1,
             2,
         );
         // Shape: [batch_size, seq_length, 1]
-        let log_probs_blank_available = Self::slice(
+        let log_probs_blank_available = Self::float_slice(
             log_probs,
             [0..batch_size, 0..seq_length, blank..(blank + 1)],
         );
         // Shape: [batch_size, seq_length, 2 * max_target_length + 1]
-        let log_probs_available = Self::empty(
+        let log_probs_available = Self::float_empty(
             Shape::from([batch_size, seq_length, target_with_blank_length]),
             &device,
         );
-        let log_probs_available = Self::slice_assign(
+        let log_probs_available = Self::float_slice_assign(
             log_probs_available,
             [0..batch_size, 0..seq_length, 0..1],
             log_probs_blank_available.clone(),
         );
-        let log_probs_available = Self::slice_assign(
+        let log_probs_available = Self::float_slice_assign(
             log_probs_available,
             [0..batch_size, 0..seq_length, 1..target_with_blank_length],
-            Self::reshape(
+            Self::float_reshape(
                 stack::<3, 4, Self>(
                     [
                         log_probs_letter_available,
-                        Self::repeat(log_probs_blank_available, 2, max_target_length),
+                        Self::float_repeat(log_probs_blank_available, 2, max_target_length),
                     ]
                     .to_vec(),
                     3,
@@ -298,11 +303,12 @@ pub trait Backend: burn::tensor::backend::Backend {
             ),
             Self::int_slice(targets_pad.clone(), [0..batch_size, 1..max_target_length]),
         )));
-        let mask_la3_blank = Self::zeros(Shape::from([batch_size, max_target_length - 1]), &device);
+        let mask_la3_blank =
+            Self::float_zeros(Shape::from([batch_size, max_target_length - 1]), &device);
         let mask_la3 = unsqueeze_dim::<2, 3, Self>(
             pad::<2, Self>(
                 // interlace mask_la3_letter and mask_la3_blank
-                Self::reshape(
+                Self::float_reshape(
                     stack::<2, 3, Self>([mask_la3_letter, mask_la3_blank].to_vec(), 2),
                     Shape::from([batch_size, 2 * (max_target_length - 1)]),
                 ),
@@ -314,13 +320,13 @@ pub trait Backend: burn::tensor::backend::Backend {
 
         for t in 1..seq_length {
             // \alpha_{t-1}(s)
-            let la1 = Self::slice(
+            let la1 = Self::float_slice(
                 log_alphas.clone(),
                 [0..batch_size, (t - 1)..t, 0..target_with_blank_length],
             );
             // \alpha_{t-1}(s-1)
-            let la2 = Self::clamp_min(
-                Self::slice(
+            let la2 = Self::float_clamp_min(
+                Self::float_slice(
                     la1.clone(),
                     [0..batch_size, 0..1, 0..(target_with_blank_length - 1)],
                 ),
@@ -328,8 +334,8 @@ pub trait Backend: burn::tensor::backend::Backend {
             );
             let la2 = pad::<3, Self>(la2, [(0, 0), (0, 0), (1, 0)], NEG_INF.elem());
             // \alpha_{t-1}(s-2)
-            let la3 = Self::clamp_min(
-                Self::slice(
+            let la3 = Self::float_clamp_min(
+                Self::float_slice(
                     la1.clone(),
                     [0..batch_size, 0..1, 0..(target_with_blank_length - 2)],
                 ),
@@ -337,31 +343,34 @@ pub trait Backend: burn::tensor::backend::Backend {
             );
             let la3 = pad::<3, Self>(la3, [(0, 0), (0, 0), (2, 0)], NEG_INF.elem());
             // for the logsumexp calculation
-            let lamax = Self::reshape(
-                Self::max_dim(
+            let lamax = Self::float_reshape(
+                Self::float_max_dim(
                     stack::<3, 4, Self>([la1.clone(), la2.clone(), la3.clone()].to_vec(), 3),
                     3,
                 ),
                 Shape::from([batch_size, 1, target_with_blank_length]),
             );
 
-            let la_sum = Self::log(Self::add_scalar(
-                Self::add(
-                    Self::add(
-                        Self::exp(Self::sub(la1, lamax.clone())),
-                        Self::exp(Self::sub(la2, lamax.clone())),
+            let la_sum = Self::float_log(Self::float_add_scalar(
+                Self::float_add(
+                    Self::float_add(
+                        Self::float_exp(Self::float_sub(la1, lamax.clone())),
+                        Self::float_exp(Self::float_sub(la2, lamax.clone())),
                     ),
-                    Self::mul(Self::exp(Self::sub(la3, lamax.clone())), mask_la3.clone()),
+                    Self::float_mul(
+                        Self::float_exp(Self::float_sub(la3, lamax.clone())),
+                        mask_la3.clone(),
+                    ),
                 ),
                 EPSILON.elem(),
             ));
-            log_alphas = Self::slice_assign(
+            log_alphas = Self::float_slice_assign(
                 log_alphas,
                 [0..batch_size, t..(t + 1), 0..target_with_blank_length],
-                Self::clamp_min(
-                    Self::add(
-                        Self::add(la_sum, lamax),
-                        Self::slice(
+                Self::float_clamp_min(
+                    Self::float_add(
+                        Self::float_add(la_sum, lamax),
+                        Self::float_slice(
                             log_probs_available.clone(),
                             [0..batch_size, t..(t + 1), 0..target_with_blank_length],
                         ),
@@ -371,10 +380,10 @@ pub trait Backend: burn::tensor::backend::Backend {
             );
         }
 
-        let l1 = Self::reshape(
-            Self::gather(
+        let l1 = Self::float_reshape(
+            Self::float_gather(
                 2,
-                Self::gather(
+                Self::float_gather(
                     1,
                     log_alphas.clone(),
                     Self::int_repeat(
@@ -393,10 +402,10 @@ pub trait Backend: burn::tensor::backend::Backend {
             ),
             Shape::from([batch_size]),
         );
-        let l2 = Self::reshape(
-            Self::gather(
+        let l2 = Self::float_reshape(
+            Self::float_gather(
                 2,
-                Self::gather(
+                Self::float_gather(
                     1,
                     log_alphas.clone(),
                     Self::int_repeat(
@@ -419,40 +428,41 @@ pub trait Backend: burn::tensor::backend::Backend {
             Shape::from([batch_size]),
         );
 
-        let m = Self::max(Self::cat([l1.clone(), l2.clone()].to_vec(), 0));
-        let m = Self::clamp_min(m, NEG_INF.elem());
-        let log_likelihood = Self::add(
-            Self::log(Self::add_scalar(
-                Self::add(
-                    Self::exp(Self::sub(l1, m.clone())),
-                    Self::exp(Self::sub(l2, m.clone())),
+        let m = Self::float_max(Self::float_cat([l1.clone(), l2.clone()].to_vec(), 0));
+        let m = Self::float_clamp_min(m, NEG_INF.elem());
+        let log_likelihood = Self::float_add(
+            Self::float_log(Self::float_add_scalar(
+                Self::float_add(
+                    Self::float_exp(Self::float_sub(l1, m.clone())),
+                    Self::float_exp(Self::float_sub(l2, m.clone())),
                 ),
                 EPSILON.elem(),
             )),
             m,
         );
-        let neg_log_likelihood = Self::neg(log_likelihood);
+        let neg_log_likelihood = Self::float_neg(log_likelihood);
 
         (neg_log_likelihood, log_alphas, targets_pad)
     }
 
     fn ctc_loss_internal_backward(
-        log_probs: Self::TensorPrimitive<3>,
+        log_probs: Self::FloatTensorPrimitive<3>,
         targets_pad: Self::IntTensorPrimitive<2>,
         input_lengths: Self::IntTensorPrimitive<1>,
         target_lengths: Self::IntTensorPrimitive<1>,
         blank: usize,
-        neg_log_likelihood: Self::TensorPrimitive<1>,
-        log_alphas: Self::TensorPrimitive<3>,
-    ) -> Self::TensorPrimitive<3> {
-        let device = Self::device(&log_probs);
-        let [batch_size, max_input_length, num_classes] = Self::shape(&log_probs).dims;
-        let mut grad = Self::full(
+        neg_log_likelihood: Self::FloatTensorPrimitive<1>,
+        log_alphas: Self::FloatTensorPrimitive<3>,
+    ) -> Self::FloatTensorPrimitive<3> {
+        let device = Self::float_device(&log_probs);
+        let [batch_size, max_input_length, num_classes] = Self::float_shape(&log_probs).dims;
+        let mut grad = Self::float_full(
             Shape::from([batch_size, max_input_length, num_classes]),
             NEG_INF.elem(),
             &device,
         );
-        let mut log_betas = Self::full(Self::shape(&log_alphas), NEG_INF.elem(), &device);
+        let mut log_betas =
+            Self::float_full(Self::float_shape(&log_alphas), NEG_INF.elem(), &device);
 
         for b in 0..batch_size {
             let input_length =
@@ -469,20 +479,20 @@ pub trait Backend: burn::tensor::backend::Backend {
                 Self::int_slice(targets_pad.clone(), [b..(b + 1), 0..target_length]),
                 Shape::from([target_length]),
             );
-            let nll = Self::reshape(
-                Self::slice(neg_log_likelihood.clone(), [b..(b + 1)]),
+            let nll = Self::float_reshape(
+                Self::float_slice(neg_log_likelihood.clone(), [b..(b + 1)]),
                 Shape::from([1, 1, 1]),
             );
 
             if input_length > 0 {
-                log_betas = Self::slice_assign(
+                log_betas = Self::float_slice_assign(
                     log_betas,
                     [
                         b..(b + 1),
                         (input_length - 1)..input_length,
                         (2 * target_length)..(2 * target_length + 1),
                     ],
-                    Self::slice(
+                    Self::float_slice(
                         log_probs.clone(),
                         [
                             b..(b + 1),
@@ -491,7 +501,7 @@ pub trait Backend: burn::tensor::backend::Backend {
                         ],
                     ),
                 );
-                grad = Self::slice_assign(
+                grad = Self::float_slice_assign(
                     grad,
                     // grad_a[input_length-1][BLANK]
                     [
@@ -500,8 +510,8 @@ pub trait Backend: burn::tensor::backend::Backend {
                         blank..(blank + 1),
                     ],
                     // log_alpha_a[input_length-1][2*target_length] + log_beta_a[input_length-1][2*target_length]
-                    Self::add(
-                        Self::slice(
+                    Self::float_add(
+                        Self::float_slice(
                             log_alphas.clone(),
                             [
                                 b..(b + 1),
@@ -509,7 +519,7 @@ pub trait Backend: burn::tensor::backend::Backend {
                                 (2 * target_length)..(2 * target_length + 1),
                             ],
                         ),
-                        Self::slice(
+                        Self::float_slice(
                             log_betas.clone(),
                             [
                                 b..(b + 1),
@@ -524,14 +534,14 @@ pub trait Backend: burn::tensor::backend::Backend {
                     let current_target_prime =
                         Self::get_target_prime(targets_data.clone(), 2 * target_length - 1, blank);
 
-                    log_betas = Self::slice_assign(
+                    log_betas = Self::float_slice_assign(
                         log_betas,
                         [
                             b..(b + 1),
                             (input_length - 1)..input_length,
                             (2 * target_length - 1)..(2 * target_length),
                         ],
-                        Self::slice(
+                        Self::float_slice(
                             log_probs.clone(),
                             [
                                 b..(b + 1),
@@ -541,7 +551,7 @@ pub trait Backend: burn::tensor::backend::Backend {
                         ),
                     );
 
-                    grad = Self::slice_assign(
+                    grad = Self::float_slice_assign(
                         grad,
                         // grad_a[input_length-1][current_target_prime]
                         [
@@ -550,8 +560,8 @@ pub trait Backend: burn::tensor::backend::Backend {
                             current_target_prime..(current_target_prime + 1),
                         ],
                         // log_alpha_a[input_length-1][2*target_length] + log_beta_a[input_length-1][2*target_length]
-                        Self::add(
-                            Self::slice(
+                        Self::float_add(
+                            Self::float_slice(
                                 log_alphas.clone(),
                                 [
                                     b..(b + 1),
@@ -559,7 +569,7 @@ pub trait Backend: burn::tensor::backend::Backend {
                                     (2 * target_length - 1)..(2 * target_length),
                                 ],
                             ),
-                            Self::slice(
+                            Self::float_slice(
                                 log_betas.clone(),
                                 [
                                     b..(b + 1),
@@ -574,7 +584,7 @@ pub trait Backend: burn::tensor::backend::Backend {
 
             for t in (0..=(input_length - 2)).rev() {
                 for s in (0..=(2 * target_length)).rev() {
-                    let lb1 = Self::slice(
+                    let lb1 = Self::float_slice(
                         log_betas.clone(),
                         [b..(b + 1), (t + 1)..(t + 2), s..(s + 1)],
                     );
@@ -583,60 +593,61 @@ pub trait Backend: burn::tensor::backend::Backend {
                     let current_target_prime =
                         Self::get_target_prime(targets_data.clone(), s, blank);
                     if s < 2 * target_length {
-                        lb2 = Self::slice(
+                        lb2 = Self::float_slice(
                             log_betas.clone(),
                             [b..(b + 1), (t + 1)..(t + 2), (s + 1)..(s + 2)],
                         );
-                        if Self::into_data(lb2.clone()).read().value[0].elem::<f32>()
-                            > Self::into_data(lbmax.clone()).read().value[0].elem::<f32>()
+                        if Self::float_into_data(lb2.clone()).read().value[0].elem::<f32>()
+                            > Self::float_into_data(lbmax.clone()).read().value[0].elem::<f32>()
                         {
                             lbmax = lb2.clone();
                         }
                     } else {
-                        lb2 = Self::full(Shape::from([1, 1, 1]), NEG_INF.elem(), &device);
+                        lb2 = Self::float_full(Shape::from([1, 1, 1]), NEG_INF.elem(), &device);
                     }
 
                     if (s < 2 * target_length - 1)
                         && (Self::get_target_prime(targets_data.clone(), s + 2, blank)
                             != current_target_prime)
                     {
-                        lb3 = Self::slice(
+                        lb3 = Self::float_slice(
                             log_betas.clone(),
                             [b..(b + 1), (t + 1)..(t + 2), (s + 2)..(s + 3)],
                         );
 
-                        if Self::into_data(lb3.clone()).read().value[0].elem::<f32>()
-                            > Self::into_data(lbmax.clone()).read().value[0].elem::<f32>()
+                        if Self::float_into_data(lb3.clone()).read().value[0].elem::<f32>()
+                            > Self::float_into_data(lbmax.clone()).read().value[0].elem::<f32>()
                         {
                             lbmax = lb3.clone();
                         }
                     } else {
-                        lb3 = Self::full(Shape::from([1, 1, 1]), NEG_INF.elem(), &device);
+                        lb3 = Self::float_full(Shape::from([1, 1, 1]), NEG_INF.elem(), &device);
                     }
 
-                    if Self::into_data(lbmax.clone()).read().value[0].elem::<f32>() == NEG_INF {
-                        lbmax = Self::full(Shape::from([1, 1, 1]), 0.elem(), &device);
+                    if Self::float_into_data(lbmax.clone()).read().value[0].elem::<f32>() == NEG_INF
+                    {
+                        lbmax = Self::float_full(Shape::from([1, 1, 1]), 0.elem(), &device);
                     }
 
-                    log_betas = Self::slice_assign(
+                    log_betas = Self::float_slice_assign(
                         log_betas,
                         [b..(b + 1), t..(t + 1), s..(s + 1)],
-                        // std::log(std::exp(lb1-lbmax)+std::exp(lb2-lbmax)+std::exp(lb3-lbmax))+lbmax + log_probs_a[t][current_target_prime]
-                        Self::add(
-                            Self::add(
-                                Self::log(Self::add_scalar(
-                                    Self::add(
-                                        Self::add(
-                                            Self::exp(Self::sub(lb1, lbmax.clone())),
-                                            Self::exp(Self::sub(lb2, lbmax.clone())),
+                        // std::float_log(std::float_exp(lb1-lbmax)+std::float_exp(lb2-lbmax)+std::float_exp(lb3-lbmax))+lbmax + log_probs_a[t][current_target_prime]
+                        Self::float_add(
+                            Self::float_add(
+                                Self::float_log(Self::float_add_scalar(
+                                    Self::float_add(
+                                        Self::float_add(
+                                            Self::float_exp(Self::float_sub(lb1, lbmax.clone())),
+                                            Self::float_exp(Self::float_sub(lb2, lbmax.clone())),
                                         ),
-                                        Self::exp(Self::sub(lb3, lbmax.clone())),
+                                        Self::float_exp(Self::float_sub(lb3, lbmax.clone())),
                                     ),
                                     EPSILON.elem(),
                                 )),
                                 lbmax.clone(),
                             ),
-                            Self::slice(
+                            Self::float_slice(
                                 log_probs.clone(),
                                 [
                                     b..(b + 1),
@@ -647,11 +658,11 @@ pub trait Backend: burn::tensor::backend::Backend {
                         ),
                     );
 
-                    let log_alpha_beta = Self::add(
-                        Self::slice(log_alphas.clone(), [b..(b + 1), t..(t + 1), s..(s + 1)]),
-                        Self::slice(log_betas.clone(), [b..(b + 1), t..(t + 1), s..(s + 1)]),
+                    let log_alpha_beta = Self::float_add(
+                        Self::float_slice(log_alphas.clone(), [b..(b + 1), t..(t + 1), s..(s + 1)]),
+                        Self::float_slice(log_betas.clone(), [b..(b + 1), t..(t + 1), s..(s + 1)]),
                     );
-                    let lcab = Self::slice(
+                    let lcab = Self::float_slice(
                         grad.clone(),
                         [
                             b..(b + 1),
@@ -660,8 +671,9 @@ pub trait Backend: burn::tensor::backend::Backend {
                         ],
                     );
 
-                    if Self::into_data(lcab.clone()).read().value[0].elem::<f32>() <= NEG_INF {
-                        grad = Self::slice_assign(
+                    if Self::float_into_data(lcab.clone()).read().value[0].elem::<f32>() <= NEG_INF
+                    {
+                        grad = Self::float_slice_assign(
                             grad.clone(),
                             [
                                 b..(b + 1),
@@ -671,26 +683,31 @@ pub trait Backend: burn::tensor::backend::Backend {
                             log_alpha_beta,
                         );
                     } else {
-                        let max = if Self::into_data(lcab.clone()).read().value[0].elem::<f32>()
-                            > Self::into_data(log_alpha_beta.clone()).read().value[0].elem::<f32>()
+                        let max = if Self::float_into_data(lcab.clone()).read().value[0]
+                            .elem::<f32>()
+                            > Self::float_into_data(log_alpha_beta.clone()).read().value[0]
+                                .elem::<f32>()
                         {
                             lcab.clone()
                         } else {
                             log_alpha_beta.clone()
                         };
 
-                        grad = Self::slice_assign(
+                        grad = Self::float_slice_assign(
                             grad.clone(),
                             [
                                 b..(b + 1),
                                 t..(t + 1),
                                 current_target_prime..(current_target_prime + 1),
                             ],
-                            Self::add(
-                                Self::log(Self::add_scalar(
-                                    Self::add(
-                                        Self::exp(Self::sub(lcab.clone(), max.clone())),
-                                        Self::exp(Self::sub(log_alpha_beta.clone(), max.clone())),
+                            Self::float_add(
+                                Self::float_log(Self::float_add_scalar(
+                                    Self::float_add(
+                                        Self::float_exp(Self::float_sub(lcab.clone(), max.clone())),
+                                        Self::float_exp(Self::float_sub(
+                                            log_alpha_beta.clone(),
+                                            max.clone(),
+                                        )),
                                     ),
                                     EPSILON.elem(),
                                 )),
@@ -703,14 +720,15 @@ pub trait Backend: burn::tensor::backend::Backend {
 
             for t in 0..input_length {
                 for c in 0..num_classes {
-                    let res = Self::slice(grad.clone(), [b..(b + 1), t..(t + 1), c..(c + 1)]);
-                    let lp = Self::slice(log_probs.clone(), [b..(b + 1), t..(t + 1), c..(c + 1)]);
-                    grad = Self::slice_assign(
+                    let res = Self::float_slice(grad.clone(), [b..(b + 1), t..(t + 1), c..(c + 1)]);
+                    let lp =
+                        Self::float_slice(log_probs.clone(), [b..(b + 1), t..(t + 1), c..(c + 1)]);
+                    grad = Self::float_slice_assign(
                         grad.clone(),
                         [b..(b + 1), t..(t + 1), c..(c + 1)],
-                        Self::sub(
-                            Self::exp(lp.clone()),
-                            Self::exp(Self::sub(Self::add(res, nll.clone()), lp)),
+                        Self::float_sub(
+                            Self::float_exp(lp.clone()),
+                            Self::float_exp(Self::float_sub(Self::float_add(res, nll.clone()), lp)),
                         ),
                     )
                 }
@@ -742,17 +760,17 @@ impl Backend for Wgpu {}
 
 impl<E: TchElement> Backend for LibTorch<E> {
     fn ctc_loss_internal_with_alphas_targetspad(
-        log_probs: Self::TensorPrimitive<3>,
+        log_probs: Self::FloatTensorPrimitive<3>,
         targets: Self::IntTensorPrimitive<1>,
         input_lengths: Self::IntTensorPrimitive<1>,
         target_lengths: Self::IntTensorPrimitive<1>,
         blank: usize,
     ) -> (
-        Self::TensorPrimitive<1>,
-        Self::TensorPrimitive<3>,
+        Self::FloatTensorPrimitive<1>,
+        Self::FloatTensorPrimitive<3>,
         Self::IntTensorPrimitive<2>,
     ) {
-        let device = Self::device(&log_probs);
+        let device = Self::float_device(&log_probs);
 
         let max_target_length = Self::int_into_data(Self::int_max(target_lengths.clone()))
             .read()
@@ -765,7 +783,7 @@ impl<E: TchElement> Backend for LibTorch<E> {
             blank,
             &device,
         );
-        let log_probs = Self::swap_dims(log_probs, 0, 1);
+        let log_probs = Self::float_swap_dims(log_probs, 0, 1);
 
         let (neg_log_likelihood, log_alphas) = tch::Tensor::f_internal_ctc_loss_tensor(
             &log_probs.tensor,
@@ -785,17 +803,17 @@ impl<E: TchElement> Backend for LibTorch<E> {
     }
 
     fn ctc_loss_internal_backward(
-        log_probs: Self::TensorPrimitive<3>,
+        log_probs: Self::FloatTensorPrimitive<3>,
         targets_pad: Self::IntTensorPrimitive<2>,
         input_lengths: Self::IntTensorPrimitive<1>,
         target_lengths: Self::IntTensorPrimitive<1>,
         blank: usize,
-        neg_log_likelihood: Self::TensorPrimitive<1>,
-        log_alphas: Self::TensorPrimitive<3>,
-    ) -> Self::TensorPrimitive<3> {
-        let [batch_size, _, _] = Self::shape(&log_probs).dims;
-        let grad = Self::ones(Shape::new([batch_size]), &Self::device(&log_probs));
-        let log_probs = Self::swap_dims(log_probs, 0, 1);
+        neg_log_likelihood: Self::FloatTensorPrimitive<1>,
+        log_alphas: Self::FloatTensorPrimitive<3>,
+    ) -> Self::FloatTensorPrimitive<3> {
+        let [batch_size, _, _] = Self::float_shape(&log_probs).dims;
+        let grad = Self::float_ones(Shape::new([batch_size]), &Self::float_device(&log_probs));
+        let log_probs = Self::float_swap_dims(log_probs, 0, 1);
 
         let res = tch::Tensor::f_internal_ctc_loss_backward_tensor(
             &grad.tensor,
@@ -810,36 +828,41 @@ impl<E: TchElement> Backend for LibTorch<E> {
         )
         .expect("libtorch fail to compute ctc loss backward");
 
-        Self::swap_dims(TchTensor::new(res), 0, 1)
+        Self::float_swap_dims(TchTensor::new(res), 0, 1)
     }
 }
 
-impl<B: Backend> Backend for Autodiff<B> {
+impl<B: Backend, C: CheckpointStrategy> Backend for Autodiff<B, C> {
     fn ctc_loss_internal(
-        log_probs: Self::TensorPrimitive<3>,
+        log_probs: Self::FloatTensorPrimitive<3>,
         targets: Self::IntTensorPrimitive<1>,
         input_lengths: Self::IntTensorPrimitive<1>,
         target_lengths: Self::IntTensorPrimitive<1>,
         blank: usize,
-    ) -> Self::TensorPrimitive<1> {
+    ) -> Self::FloatTensorPrimitive<1> {
         #[derive(Debug)]
         struct CTCLoss;
 
         impl<B: Backend> Backward<B, 1, 1> for CTCLoss {
-            // type State = (B::TensorPrimitive<2>, IntTensor<B, 2>);
+            // type State = (B::FloatTensorPrimitive<2>, IntTensor<B, 2>);
             type State = (
-                B::TensorPrimitive<3>,
+                NodeID,
                 B::IntTensorPrimitive<2>,
                 B::IntTensorPrimitive<1>,
                 B::IntTensorPrimitive<1>,
                 usize,
-                B::TensorPrimitive<1>,
-                B::TensorPrimitive<3>,
+                B::FloatTensorPrimitive<1>,
+                B::FloatTensorPrimitive<3>,
             );
 
-            fn backward(self, ops: Ops<Self::State, 1>, grads: &mut Gradients) {
+            fn backward(
+                self,
+                ops: Ops<Self::State, 1>,
+                grads: &mut Gradients,
+                checkpointer: &mut Checkpointer,
+            ) {
                 let (
-                    log_probs,
+                    log_probs_state,
                     targets_pad,
                     input_lengths,
                     target_lengths,
@@ -848,8 +871,10 @@ impl<B: Backend> Backend for Autodiff<B> {
                     log_alphas,
                 ) = ops.state;
 
+                let log_probs = checkpointer.retrieve_node_output(log_probs_state);
+
                 unary::<B, 1, 3, _>(ops.parents, ops.node, grads, |grad| {
-                    let [batch_size] = B::shape(&grad).dims;
+                    let [batch_size] = B::float_shape(&grad).dims;
 
                     let res = B::ctc_loss_internal_backward(
                         log_probs,
@@ -861,19 +886,22 @@ impl<B: Backend> Backend for Autodiff<B> {
                         log_alphas,
                     );
 
-                    B::mul(
+                    B::float_mul(
                         res.clone(),
-                        B::reshape(grad, Shape::from([batch_size, 1, 1])),
+                        B::float_reshape(grad, Shape::from([batch_size, 1, 1])),
                     )
                 });
             }
         }
 
         match CTCLoss
-            .prepare([log_probs.clone().node], [log_probs.clone().graph])
+            .prepare::<C>([log_probs.clone().node])
+            .compute_bound()
             .stateful()
         {
-            OpsKind::Tracked(prep) => {
+            OpsKind::Tracked(mut prep) => {
+                let log_probs_state = prep.checkpoint(&log_probs);
+
                 let (neg_log_likelihood, log_alphas, targets_pad) =
                     B::ctc_loss_internal_with_alphas_targetspad(
                         log_probs.clone().primitive,
@@ -884,7 +912,7 @@ impl<B: Backend> Backend for Autodiff<B> {
                     );
                 prep.finish(
                     (
-                        log_probs.primitive,
+                        log_probs_state,
                         targets_pad,
                         input_lengths,
                         target_lengths,

@@ -4,7 +4,7 @@ use burn::{
     nn::{
         conv::{Conv2d, Conv2dConfig},
         pool::{MaxPool2d, MaxPool2dConfig},
-        BatchNorm, BatchNormConfig, Linear, LinearConfig, ReLU,
+        BatchNorm, BatchNormConfig, Linear, LinearConfig, Relu,
     },
     tensor::{
         activation,
@@ -26,9 +26,9 @@ pub struct BidirectionalLSTM<B: Backend> {
 
 impl<B: Backend> BidirectionalLSTM<B> {
     pub fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
-        let (_, recurrent) = self.rnn.forward(input, None);
-        let [batch_size, seq_length, _] = recurrent.dims();
-        let t_rec = recurrent.reshape([(batch_size * seq_length) as i32, -1]);
+        let (output, _) = self.rnn.forward(input, None);
+        let [batch_size, seq_length, _] = output.dims();
+        let t_rec = output.reshape([(batch_size * seq_length) as i32, -1]);
 
         let output = self.embedding.forward(t_rec);
         let output = output.reshape([batch_size as i32, seq_length as i32, -1]);
@@ -59,7 +59,7 @@ pub struct CRNN<B: Backend> {
     pub convs: Vec<Conv2d<B>>,
     pub batchnorms: Vec<BatchNorm<B, 2>>,
     pub poolings: Vec<MaxPool2d>,
-    relu: ReLU,
+    relu: Relu,
     // 2. rnn
     pub rnn0: BidirectionalLSTM<B>,
     pub rnn1: BidirectionalLSTM<B>,
@@ -188,7 +188,7 @@ impl CRNNConfig {
             convs,
             batchnorms,
             poolings,
-            relu: ReLU::new(),
+            relu: Relu::new(),
             rnn0: BidirectionalLSTMConfig::new(512, self.rnn_hidden_size, self.rnn_hidden_size)
                 .init(device),
             rnn1: BidirectionalLSTMConfig::new(
